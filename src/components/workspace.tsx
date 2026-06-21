@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import Editor from "@monaco-editor/react";
 import { Play, Copy, Check, Download, MoreVertical, Loader2 } from "lucide-react";
 import {
@@ -40,8 +40,6 @@ export function Workspace({
   const [copied, setCopied] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
-  const codeRef = useRef(code);
-  codeRef.current = code;
 
   const storageKey = (l: RunLang) => `code:${problemId}:${l}`;
 
@@ -67,7 +65,7 @@ export function Workspace({
   }
 
   function copyCode() {
-    navigator.clipboard.writeText(codeRef.current).then(() => {
+    navigator.clipboard.writeText(code).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
     });
@@ -75,7 +73,7 @@ export function Workspace({
 
   function downloadCode() {
     const ext = lang === "CPP" ? "cpp" : "py";
-    const blob = new Blob([codeRef.current], { type: "text/plain;charset=utf-8" });
+    const blob = new Blob([code], { type: "text/plain;charset=utf-8" });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
     a.download = `${filenameBase}.${ext}`;
@@ -173,7 +171,7 @@ export function Workspace({
                   <button
                     className={menuItem}
                     onClick={() => {
-                      saveTemplate(lang, codeRef.current);
+                      saveTemplate(lang, code);
                       setMenuOpen(false);
                       flash("Saved — applies to new problems");
                     }}

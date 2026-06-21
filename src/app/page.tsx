@@ -57,38 +57,34 @@ function CoachPanel({ insights }: { insights: Insight[] }) {
 }
 
 async function getStats() {
-  const [catalog, topics, solvedRows, latestRating, byMonth, recentContest, curated] =
-    await Promise.all([
-      prisma.problem.count(),
-      prisma.topic.count(),
-      prisma.submission.findMany({
-        where: { verdict: "AC" },
-        distinct: ["problemId"],
-        select: { problemId: true },
-      }),
-      prisma.ratingSnapshot.findFirst({
-        where: { kind: "CF_REAL" },
-        orderBy: { takenAt: "desc" },
-      }),
-      prisma.topic.groupBy({ by: ["month"], _count: true, orderBy: { month: "asc" } }),
-      prisma.contest.findFirst({ orderBy: { startsAt: "desc" } }),
-      prisma.curatedProblem.findMany({
-        orderBy: [{ topic: { month: "asc" } }, { topic: { name: "asc" } }, { order: "asc" }],
-        select: {
-          problemId: true,
-          problem: { select: { id: true, title: true } },
-          topic: { select: { name: true, month: true } },
-        },
-      }),
-    ]);
+  const [solvedRows, latestRating, recentContest, curated] = await Promise.all([
+    prisma.submission.findMany({
+      where: { verdict: "AC" },
+      distinct: ["problemId"],
+      select: { problemId: true },
+    }),
+    prisma.ratingSnapshot.findFirst({
+      where: { kind: "CF_REAL" },
+      orderBy: { takenAt: "desc" },
+    }),
+    prisma.contest.findFirst({ orderBy: { startsAt: "desc" } }),
+    prisma.curatedProblem.findMany({
+      orderBy: [{ topic: { month: "asc" } }, { topic: { name: "asc" } }, { order: "asc" }],
+      select: {
+        problemId: true,
+        problem: { select: { id: true, title: true } },
+        topic: { select: { name: true, month: true } },
+      },
+    }),
+  ]);
 
   const solvedSet = new Set(solvedRows.map((s) => s.problemId));
   let nextUp: { id: string; title: string; topic: string; month: number } | null = null;
+  let pathSolved = 0;
   for (const c of curated) {
-    if (!solvedSet.has(c.problemId)) {
+    if (solvedSet.has(c.problemId)) pathSolved++;
+    else if (!nextUp)
       nextUp = { id: c.problem.id, title: c.problem.title, topic: c.topic.name, month: c.topic.month };
-      break;
-    }
   }
 
   let liveContest: { id: string; title: string } | null = null;
@@ -97,20 +93,17 @@ async function getStats() {
     if (Date.now() < ends) liveContest = { id: recentContest.id, title: recentContest.title };
   }
 
-  return { catalog, topics, solved: solvedSet.size, latestRating, byMonth, nextUp, liveContest };
+  return {
+    solved: solvedSet.size,
+    latestRating,
+    nextUp,
+    liveContest,
+    pathSolved,
+    pathTotal: curated.length,
+  };
 }
 
-function Stat({
-  label,
-  value,
-  sub,
-  color,
-}: {
-  label: string;
-  value: string | number;
-  sub?: string;
-  color?: string;
-}) {
+function Stat({ label, value, sub, color }: { label: string; value: string | number; sub?: string; color?: string }) {
   return (
     <div className="rounded-lg border border-border bg-surface p-5">
       <div className="text-xs uppercase tracking-wide text-muted">{label}</div>
@@ -122,36 +115,15 @@ function Stat({
   );
 }
 
-const AXIS_CARDS = [
-  {
-    label: "Observation",
-    color: "var(--obs)",
-    desc: "Reduce an unknown problem to a known one. Greedy, DP, combinatorics lean here.",
-  },
-  {
-    label: "Technique",
-    color: "var(--tech)",
-    desc: "Apply known algorithms & data structures. Segment trees, geometry, strings.",
-  },
-  {
-    label: "Implementation",
-    color: "var(--impl)",
-    desc: "Code a correct, fast, debugged solution under time pressure.",
-  },
-];
-
 export default async function DashboardPage() {
-  const { catalog, topics, solved, latestRating, byMonth, nextUp, liveContest } =
-    await getStats();
+  const { solved, latestRating, nextUp, liveContest, pathSolved, pathTotal } = await getStats();
   const user = await prisma.user.findFirst({ select: { id: true } });
   const insights = user ? await getCoachInsights(prisma, user.id) : [];
 
   return (
-    <div className="mx-auto max-w-5xl px-8 py-10">
+    <div className="mx-auto max-w-4xl px-8 py-10">
       <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
-      <p className="mt-1 text-sm text-muted">
-        A normal judge records one bit per problem. This one records three.
-      </p>
+      <p className="mt-1 text-sm text-muted">What to work on today.</p>
 
       <CoachPanel insights={insights} />
 
@@ -193,72 +165,17 @@ export default async function DashboardPage() {
         )}
       </div>
 
-      <div className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
-        <Stat label="Catalog" value={catalog.toLocaleString()} sub="problems synced" />
-        <Stat label="Solved" value={solved} sub="authoritative (OJ-synced)" color="var(--ac)" />
-        <Stat label="Topics" value={topics} sub="12-month curriculum" />
+      {/* Compact stats */}
+      <div className="mt-4 grid grid-cols-3 gap-4">
+        <Stat label="Path progress" value={`${pathSolved}/${pathTotal}`} sub="curated problems" />
+        <Stat label="Solved" value={solved} sub="all-time" color="var(--ac)" />
         <Stat
-          label="CF Rating"
+          label="CF rating"
           value={latestRating?.value ?? "—"}
-          sub={latestRating ? "live from Codeforces" : "no rated contests yet"}
+          sub={latestRating ? "from Codeforces" : "no rated contests yet"}
           color={ratingColor(latestRating?.value)}
         />
       </div>
-
-      <section className="mt-10">
-        <h2 className="text-sm font-medium text-muted uppercase tracking-wide">
-          The three axes
-        </h2>
-        <div className="mt-3 grid gap-4 sm:grid-cols-3">
-          {AXIS_CARDS.map((a) => (
-            <div key={a.label} className="rounded-lg border border-border bg-surface p-5">
-              <div className="flex items-center gap-2">
-                <span
-                  className="h-2.5 w-2.5 rounded-full"
-                  style={{ background: a.color }}
-                />
-                <span className="font-medium" style={{ color: a.color }}>
-                  {a.label}
-                </span>
-              </div>
-              <p className="mt-2 text-sm text-muted leading-relaxed">{a.desc}</p>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      <section className="mt-10 grid gap-4 sm:grid-cols-2">
-        <div className="rounded-lg border border-border bg-surface p-5">
-          <h2 className="text-sm font-medium">Curriculum coverage</h2>
-          <div className="mt-3 flex flex-wrap gap-1.5">
-            {byMonth.map((m) => (
-              <span
-                key={m.month}
-                className="rounded bg-surface-2 px-2 py-1 text-xs text-muted"
-                title={`Month ${m.month}`}
-              >
-                M{m.month}
-                <span className="ml-1 text-foreground">{m._count}</span>
-              </span>
-            ))}
-          </div>
-          <p className="mt-3 text-xs text-muted">Topics per curriculum month.</p>
-        </div>
-
-        <div className="rounded-lg border border-border bg-surface p-5">
-          <h2 className="text-sm font-medium">Track your weaknesses</h2>
-          <p className="mt-2 text-sm text-muted">
-            See per-axis mastery, your activity, and the bugs &amp; gaps that keep
-            tripping you up.
-          </p>
-          <Link
-            href="/analytics"
-            className="mt-4 inline-flex rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground hover:opacity-90"
-          >
-            Open analytics →
-          </Link>
-        </div>
-      </section>
     </div>
   );
 }
