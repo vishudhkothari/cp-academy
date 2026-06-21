@@ -86,24 +86,32 @@ export async function syncCsesProblems(prisma: PrismaClient) {
 }
 
 // ── Curated ladders: the answer to "what do I solve next?" ────────────────────
-// Per topic: CSES problems first (canonical order), then a Codeforces ladder
-// (a difficulty ramp using the most-solved = most representative problems).
+// Tighter, full-coverage curation. Each topic gets a short hand-feeling ladder:
+// CSES core (canonical order, capped) + a Codeforces ramp from the topic's tag
+// pool. CF problems are deduped GLOBALLY in curriculum order, so coarse tags
+// ("dp", "data structures") spread across the topics that use them — earlier
+// topics get the easier ones, later topics the harder ones — instead of one
+// topic hogging everything and the rest sitting empty.
 function capForMonth(month: number): number {
-  return Math.min(2600, 1000 + month * 130);
+  return Math.min(2500, 1000 + month * 130);
 }
+
+const CSES_CAP = 10;
+const CF_CAP = 8;
 
 export async function generateCuratedProblems(prisma: PrismaClient) {
   const topics = await prisma.topic.findMany({
-    select: { id: true, slug: true, month: true },
+    orderBy: [{ month: "asc" }, { name: "asc" }],
+    select: { id: true, month: true, cfTags: true },
   });
 
-  // CSES global order (for sequencing CSES problems within a topic).
   const cses = await fetchCsesProblemset();
   const csesOrder = new Map<string, number>();
   for (const c of cses) csesOrder.set(c.externalId, c.order);
 
   await prisma.curatedProblem.deleteMany({});
 
+  const usedCF = new Set<string>();
   let total = 0;
   for (const topic of topics) {
     const cap = capForMonth(topic.month);
@@ -116,7 +124,7 @@ export async function generateCuratedProblems(prisma: PrismaClient) {
     }[] = [];
     let order = 0;
 
-    // 1) CSES core, in canonical order.
+    // 1) CSES core, canonical order, capped.
     const csesProbs = await prisma.problem.findMany({
       where: { source: "CSES", topicId: topic.id },
       select: { id: true, externalId: true },
@@ -125,37 +133,42 @@ export async function generateCuratedProblems(prisma: PrismaClient) {
       (a, b) =>
         (csesOrder.get(a.externalId) ?? 1e9) - (csesOrder.get(b.externalId) ?? 1e9),
     );
-    for (const p of csesProbs) {
+    for (const p of csesProbs.slice(0, CSES_CAP)) {
       items.push({ topicId: topic.id, problemId: p.id, order: order++, tier: "core", kind: "cses" });
     }
 
-    // 2) Codeforces ladder — top-3 most-solved per 100-rating bucket up to the cap.
-    const cfProbs = await prisma.problem.findMany({
-      where: {
-        source: "CODEFORCES",
-        topicId: topic.id,
-        sourceRating: { gte: 800, lte: cap },
-      },
-      select: { id: true, sourceRating: true, solvedCount: true },
-    });
-    const buckets = new Map<number, typeof cfProbs>();
-    for (const p of cfProbs) {
-      const b = Math.floor((p.sourceRating ?? 0) / 100) * 100;
-      if (!buckets.has(b)) buckets.set(b, []);
-      buckets.get(b)!.push(p);
-    }
-    const ladder: typeof cfProbs = [];
-    for (const b of [...buckets.keys()].sort((a, z) => a - z)) {
-      const top = buckets
-        .get(b)!
-        .sort((a, z) => (z.solvedCount ?? 0) - (a.solvedCount ?? 0))
-        .slice(0, 3);
-      ladder.push(...top);
-    }
-    for (const p of ladder) {
-      const r = p.sourceRating ?? 0;
-      const tier = r <= cap * 0.6 ? "core" : r <= cap * 0.85 ? "extra" : "challenge";
-      items.push({ topicId: topic.id, problemId: p.id, order: order++, tier, kind: "cf-ladder" });
+    // 2) Codeforces ramp from the topic's tag pool — top-2 most-solved per
+    //    100-rating bucket, deduped globally, capped.
+    if (topic.cfTags.length) {
+      const cfProbs = await prisma.problem.findMany({
+        where: {
+          source: "CODEFORCES",
+          sourceTags: { hasSome: topic.cfTags },
+          sourceRating: { gte: 800, lte: cap },
+        },
+        select: { id: true, sourceRating: true, solvedCount: true },
+      });
+      const buckets = new Map<number, typeof cfProbs>();
+      for (const p of cfProbs) {
+        if (usedCF.has(p.id)) continue;
+        const b = Math.floor((p.sourceRating ?? 0) / 100) * 100;
+        if (!buckets.has(b)) buckets.set(b, []);
+        buckets.get(b)!.push(p);
+      }
+      const ladder: typeof cfProbs = [];
+      for (const b of [...buckets.keys()].sort((a, z) => a - z)) {
+        const top = buckets
+          .get(b)!
+          .sort((a, z) => (z.solvedCount ?? 0) - (a.solvedCount ?? 0))
+          .slice(0, 2);
+        ladder.push(...top);
+      }
+      for (const p of ladder.slice(0, CF_CAP)) {
+        const r = p.sourceRating ?? 0;
+        const tier = r <= cap * 0.6 ? "core" : r <= cap * 0.85 ? "extra" : "challenge";
+        items.push({ topicId: topic.id, problemId: p.id, order: order++, tier, kind: "cf-ladder" });
+        usedCF.add(p.id);
+      }
     }
 
     if (items.length) {

@@ -131,6 +131,7 @@ model Topic {
   name    String
   month   Int // curriculum month (see docs/03-CURRICULUM.md)
   lean    AxisLean @default(MIXED)
+  cfTags  String[] @default([]) // Codeforces tags this topic draws problems from
   prereqs String[] @default([]) // topic slugs (soft prerequisites)
   resources Json? // curated multi-source links (paper IO-2)
   description String?

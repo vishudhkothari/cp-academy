@@ -40,7 +40,7 @@ export const topics: SeedTopic[] = [
   { slug: "topological-sort", name: "Topological Sort", month: 4, lean: "TECHNIQUE_HEAVY", cfTags: ["graphs"], prereqs: ["graph-traversal"] },
   { slug: "dsu", name: "Union-Find (DSU)", month: 4, lean: "TECHNIQUE_HEAVY", cfTags: ["dsu"] },
   { slug: "shortest-paths", name: "Shortest Paths", month: 4, lean: "TECHNIQUE_HEAVY", cfTags: ["shortest paths"], prereqs: ["graph-traversal"] },
-  { slug: "mst", name: "Minimum Spanning Tree", month: 4, lean: "TECHNIQUE_HEAVY", cfTags: ["graphs"], prereqs: ["dsu"] },
+  { slug: "mst", name: "Minimum Spanning Tree", month: 4, lean: "TECHNIQUE_HEAVY", cfTags: ["graphs", "dsu"], prereqs: ["dsu"] },
 
   // ── Month 5 — DP foundations ───────────────────────────────────────────────
   { slug: "dp-foundations", name: "DP Foundations", month: 5, lean: "OBSERVATION_HEAVY", cfTags: ["dp"] },
