@@ -1,0 +1,370 @@
+// CP Academy — data model. See docs/02-DATA-MODEL.md for rationale.
+// The spine is the 3-axis skill model: problems carry observation/technique/
+// implementation difficulty; submissions + reflections feed per-axis mastery.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────────
+
+enum Source {
+  CODEFORCES
+  ATCODER
+  CSES
+  MANUAL
+}
+
+enum Language {
+  CPP
+  PYTHON
+}
+
+enum Verdict {
+  AC
+  WA
+  TLE
+  MLE
+  RE
+  CE
+  PENDING
+}
+
+enum SubmissionOrigin {
+  LOCAL_RUN // ran via Piston against samples/custom
+  OJ_SYNCED // authoritative verdict pulled from the real judge
+  MANUAL // hand-logged
+}
+
+enum Axis {
+  OBSERVATION
+  TECHNIQUE
+  IMPLEMENTATION
+}
+
+// Reflection failure reasons extend the three axes with process failure modes.
+enum FailReason {
+  OBSERVATION
+  TECHNIQUE
+  IMPLEMENTATION
+  DEBUG
+  TIME
+  CARELESS
+}
+
+enum AxisLean {
+  OBSERVATION_HEAVY
+  TECHNIQUE_HEAVY
+  MIXED
+}
+
+enum SolveState {
+  IN_CONTEST
+  UPSOLVED
+  UNSOLVED
+}
+
+enum BugType {
+  OVERFLOW
+  OFF_BY_ONE
+  TYPO
+  LOGIC
+  WRONG_OBSERVATION
+  COMPLEXITY
+  EDGE_CASE
+  OTHER
+}
+
+enum ContestKind {
+  DAILY
+  WEEKLY
+  MONTHLY
+  QUARTERLY_MOCK
+}
+
+enum ContestStatus {
+  SCHEDULED
+  LIVE
+  ENDED
+}
+
+enum RatingKind {
+  CF_REAL
+  ATCODER_REAL
+  READINESS
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core
+// ─────────────────────────────────────────────────────────────────────────────
+
+model User {
+  id            String  @id @default(cuid())
+  email         String  @unique
+  cfHandle      String?
+  atcoderHandle String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  submissions     Submission[]
+  reflections     Reflection[]
+  masteryStates   MasteryState[]
+  reviewCards     ReviewCard[]
+  contestEntries  ContestEntry[]
+  ratingSnapshots RatingSnapshot[]
+  templates       Template[]
+  dailyPlans      DailyPlan[]
+}
+
+model Topic {
+  id      String   @id @default(cuid())
+  slug    String   @unique
+  name    String
+  month   Int // curriculum month (see docs/03-CURRICULUM.md)
+  lean    AxisLean @default(MIXED)
+  prereqs String[] @default([]) // topic slugs (soft prerequisites)
+  resources Json? // curated multi-source links (paper IO-2)
+  description String?
+
+  problems      Problem[]
+  masteryStates MasteryState[]
+  templates     Template[]
+  curated       CuratedProblem[]
+}
+
+model Problem {
+  id           String   @id @default(cuid())
+  source       Source
+  externalId   String // e.g. "1850/A"
+  title        String
+  url          String // deep-link to original statement (never mirrored)
+  sourceRating Int? // CF rating / AtCoder difficulty
+  sourceTags   String[] @default([])
+  solvedCount  Int? // CF solve count — proxy for how canonical/representative a problem is
+  csesSection  String? // original CSES section, for the CSES-track view
+  statementHtml String? // cached, rendered statement (fetched once from source for personal use)
+
+  // our annotations (the 3-axis model)
+  topicId        String?
+  topic          Topic?  @relation(fields: [topicId], references: [id])
+  obsDifficulty  Int? // 0-5 observation load (EO-1)
+  techDifficulty Int? // 0-5 technique load (EO-2)
+  implDifficulty Int? // 0-5 implementation load (EO-3)
+  isScaffold     Boolean @default(false) // paper P10 warm-up problem
+  notes          String?
+
+  syncedAt  DateTime?
+  createdAt DateTime  @default(now())
+
+  submissions     Submission[]
+  reflections     Reflection[]
+  contestProblems ContestProblem[]
+  reviewCards     ReviewCard[]
+  curated         CuratedProblem[]
+
+  @@unique([source, externalId])
+  @@index([source, sourceRating])
+  @@index([topicId])
+}
+
+// A curated, ordered ladder of problems per topic — the answer to "what do I
+// solve next?". Generated from CSES (canonical order) + Codeforces ladders.
+model CuratedProblem {
+  id        String  @id @default(cuid())
+  topicId   String
+  topic     Topic   @relation(fields: [topicId], references: [id], onDelete: Cascade)
+  problemId String
+  problem   Problem @relation(fields: [problemId], references: [id], onDelete: Cascade)
+  order     Int // position within the topic ladder
+  tier      String // "core" | "extra" | "challenge"
+  kind      String // "cses" | "cf-ladder" | "atcoder-dp"
+
+  @@unique([topicId, problemId])
+  @@index([topicId, order])
+}
+
+model Submission {
+  id        String           @id @default(cuid())
+  userId    String
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problemId String
+  problem   Problem          @relation(fields: [problemId], references: [id])
+  language  Language
+  source    String // the code
+  verdict   Verdict
+  origin    SubmissionOrigin
+  inContest Boolean          @default(false)
+  contestId String?
+  runtimeMs Int?
+  memoryKb  Int?
+  createdAt DateTime         @default(now())
+
+  @@index([userId, problemId])
+  @@index([userId, createdAt])
+}
+
+// Paper P5: the 6-level reflection ladder IS the failure taxonomy.
+model Reflection {
+  id           String      @id @default(cuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problemId    String
+  problem      Problem     @relation(fields: [problemId], references: [id])
+  contestId    String?
+  solveState   SolveState
+  stuckLevel   Int // 1..6 (paper's Level 1-6 checklist)
+  failReason   FailReason?
+  bugType      BugType?
+  note         String      @default("")
+  hintsUsed    Int         @default(0) // max coaching-scaffold level reached
+  timeSpentMin Int?
+  createdAt    DateTime    @default(now())
+
+  @@index([userId, createdAt])
+  @@index([problemId])
+}
+
+// Per-user, per-topic, per-axis mastery — the heart of analytics & recs.
+model MasteryState {
+  id       String    @id @default(cuid())
+  userId   String
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topicId  String
+  topic    Topic     @relation(fields: [topicId], references: [id])
+  axis     Axis
+  score    Float     @default(0) // 0..1 EWMA of difficulty-weighted outcomes
+  attempts Int       @default(0)
+  lastSeen DateTime?
+
+  @@unique([userId, topicId, axis])
+  @@index([userId])
+}
+
+// Spaced repetition over solved PATTERNS (paper P12), FSRS/SM-2-style.
+model ReviewCard {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  problemId  String
+  problem    Problem  @relation(fields: [problemId], references: [id])
+  due        DateTime
+  stability  Float    @default(1)
+  difficulty Float    @default(5)
+  reps       Int      @default(0)
+  lapses     Int      @default(0)
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, problemId])
+  @@index([userId, due])
+}
+
+model Contest {
+  id          String        @id @default(cuid())
+  kind        ContestKind
+  title       String
+  durationMin Int
+  startsAt    DateTime
+  status      ContestStatus @default(SCHEDULED)
+  createdAt   DateTime      @default(now())
+
+  problems ContestProblem[]
+  entries  ContestEntry[]
+}
+
+// Paper P4: 3 problems map to the 3 axes.
+model ContestProblem {
+  id         String  @id @default(cuid())
+  contestId  String
+  contest    Contest @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  problemId  String
+  problem    Problem @relation(fields: [problemId], references: [id])
+  slot       Int // 0=review/observation, 1=technique, 2=implementation
+  targetAxis Axis
+
+  @@unique([contestId, slot])
+}
+
+model ContestEntry {
+  id              String  @id @default(cuid())
+  userId          String
+  user            User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contestId       String
+  contest         Contest @relation(fields: [contestId], references: [id], onDelete: Cascade)
+  solvedInContest Int     @default(0)
+  upsolved        Int     @default(0)
+  performance     Float? // readiness contribution, NOT a synthetic Elo
+
+  @@unique([userId, contestId])
+}
+
+model RatingSnapshot {
+  id      String     @id @default(cuid())
+  userId  String
+  user    User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  kind    RatingKind
+  value   Int
+  takenAt DateTime   @default(now())
+
+  @@index([userId, kind, takenAt])
+}
+
+// Personal Reference Book (paper P11 / SO-2).
+model Template {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  language  Language
+  topicId   String?
+  topic     Topic?   @relation(fields: [topicId], references: [id])
+  code      String
+  notes     String?
+  version   Int      @default(1)
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// Tracks that the user revealed the solution for a problem (gated reveal).
+model SolutionView {
+  id        String   @id @default(cuid())
+  userId    String
+  problemId String
+  seenAt    DateTime @default(now())
+
+  @@unique([userId, problemId])
+  @@index([userId])
+}
+
+// Highest coaching-ladder level reached per problem (1-6; 6 = full solution
+// seen). Feeds weakness analytics ("you needed observation hints on graphs").
+model CoachUsage {
+  id        String   @id @default(cuid())
+  userId    String
+  problemId String
+  maxLevel  Int      @default(0)
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, problemId])
+  @@index([userId])
+}
+
+model DailyPlan {
+  id     String   @id @default(cuid())
+  userId String
+  user   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  date   DateTime
+  items  Json // [{type, ref, reason}]
+
+  @@unique([userId, date])
+}

@@ -1,26 +1,231 @@
 @import "tailwindcss";
 
+/* ── CP Academy theme ──────────────────────────────────────────────────────
+   Dark, focused, Codeforces-adjacent. The three skill axes have fixed colors
+   used everywhere (problems, contests, analytics):
+     observation = blue · technique = amber · implementation = green        */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0b0e14;
+  --surface: #11151f;
+  --surface-2: #161b27;
+  --border: #232a39;
+  --foreground: #e6e9ef;
+  --muted: #8a93a6;
+  --accent: #5b8cff;
+  --accent-foreground: #ffffff;
+
+  --obs: #4f9dff; /* observation  */
+  --tech: #f0a13a; /* technique    */
+  --impl: #45c98a; /* implementation */
+
+  --ac: #45c98a;
+  --wa: #ef5e6b;
+  --warn: #f0a13a;
 }
 
 @theme inline {
   --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-border: var(--border);
   --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-obs: var(--obs);
+  --color-tech: var(--tech);
+  --color-impl: var(--impl);
+  --color-ac: var(--ac);
+  --color-wa: var(--wa);
+  --color-warn: var(--warn);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  border-color: var(--border);
 }
 
 body {
-  background: var(--background);
+  background:
+    radial-gradient(1200px 600px at 100% -10%, rgba(91, 140, 255, 0.06), transparent 60%),
+    var(--background);
   color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* interaction polish */
+button,
+a,
+input,
+select,
+textarea {
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease,
+    opacity 0.15s ease,
+    transform 0.1s ease;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+::selection {
+  background: rgba(91, 140, 255, 0.3);
+}
+
+@keyframes shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--surface-2);
+  border-radius: 6px;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.04), transparent);
+  animation: shimmer 1.4s infinite;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ── Rendered problem statement (Codeforces / CSES) ───────────────────────── */
+.statement {
+  font-size: 0.9rem;
+  line-height: 1.65;
+  color: var(--foreground);
+}
+.statement p {
+  margin: 0.7rem 0;
+}
+.statement h1,
+.statement h2,
+.statement h3,
+.statement .section-title {
+  font-weight: 600;
+  margin: 1.2rem 0 0.5rem;
+  color: var(--foreground);
+}
+.statement h1 {
+  font-size: 1.05rem;
+}
+.statement h2,
+.statement .section-title {
+  font-size: 0.98rem;
+}
+.statement .stmt-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-bottom: 1.1rem;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid var(--border);
+}
+.statement .meta-pill {
+  font-size: 0.72rem;
+  color: var(--muted);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 9999px;
+  padding: 0.15rem 0.6rem;
+  white-space: nowrap;
+}
+.statement .header {
+  margin-bottom: 1rem;
+  padding-bottom: 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+.statement .header .title {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.statement .time-limit,
+.statement .memory-limit,
+.statement .input-file,
+.statement .output-file {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+.statement .property-title {
+  margin-right: 0.35rem;
+  color: var(--muted);
+}
+.statement ul,
+.statement ol {
+  margin: 0.6rem 0 0.6rem 1.3rem;
+}
+.statement ul {
+  list-style: disc;
+}
+.statement ol {
+  list-style: decimal;
+}
+.statement li {
+  margin: 0.25rem 0;
+}
+.statement pre {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  margin: 0.4rem 0;
+  overflow-x: auto;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+}
+.statement code {
+  background: var(--surface-2);
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.85em;
+}
+.statement pre code {
+  background: transparent;
+  padding: 0;
+}
+.statement .sample-test {
+  margin: 0.75rem 0;
+}
+.statement .sample-test .title {
+  font-size: 0.75rem;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+.statement img {
+  max-width: 100%;
+  height: auto;
+}
+.statement a {
+  color: var(--accent);
+}
+.statement .katex {
+  font-size: 1em;
+}
+.statement .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.25rem 0;
 }
