@@ -7,8 +7,9 @@ import type { PrismaClient } from "@prisma/client";
 //     rating across BOTH Codeforces and AtCoder, 800→2100 (past CM's door),
 //     that tracks your solves and feeds the same mastery/readiness engine.
 //
-// "Most solved at a rating" is a strong quality proxy: the famous, well-known
-// problems at each level are exactly the ones hand-curated sheets converge on.
+// Problems are ranked by our curation QUALITY score (log-damped popularity ×
+// contest-type × recency), not raw solve count — so each rung surfaces the
+// best-for-learning problems at that level, not just the oldest/most-attempted.
 
 export type LadderProblem = {
   id: string;
@@ -56,7 +57,7 @@ export async function getRatingLadder(
         source: { in: ["CODEFORCES", "ATCODER"] },
         sourceRating: { gte: rating, lt: rating + 100 },
       },
-      orderBy: { solvedCount: "desc" },
+      orderBy: [{ quality: "desc" }, { solvedCount: "desc" }],
       take: perRating,
       select: { id: true, title: true, url: true, source: true, sourceRating: true },
     });

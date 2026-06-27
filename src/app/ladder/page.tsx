@@ -24,10 +24,11 @@ export default async function LadderPage() {
         </div>
       </div>
       <p className="mt-1 text-sm text-muted">
-        The canonical (most-solved) problems at each rating, 800 → 2100, across
-        Codeforces <em>and</em> AtCoder. A rating climb in the CP-31 spirit — but
-        multi-source, past Candidate Master, and wired into your mastery and
-        readiness. Pick your level and grind it until it&apos;s easy.
+        The best problems at each rating, 800 → 2100, across Codeforces{" "}
+        <em>and</em> AtCoder. Ranked by quality — popularity, contest type
+        (Educational / Div 3-4 favored), and recency — not just raw solve count. A
+        rating climb in the CP-31 spirit, but multi-source, past Candidate Master,
+        and wired into your mastery and readiness.
       </p>
 
       <div className="mt-8 space-y-3">

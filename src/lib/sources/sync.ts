@@ -1,11 +1,14 @@
 import type { PrismaClient } from "@prisma/client";
 import {
   fetchProblemset,
+  fetchContests,
   fetchUserStatus,
   fetchUserRating,
   cfExternalId,
   cfProblemUrl,
   pickTopicSlug,
+  cfQuality,
+  type CfContest,
 } from "./codeforces";
 import { fetchCsesProblemset, CSES_SECTION_TO_TOPIC } from "./cses";
 import {
@@ -14,6 +17,7 @@ import {
   fetchAtcoderUserStatus,
   atExternalId,
   atProblemUrl,
+  atQuality,
 } from "./atcoder";
 
 // ── Codeforces problemset → catalog (metadata + topic mapping + solve count) ──
@@ -28,9 +32,19 @@ export async function syncCodeforcesProblems(prisma: PrismaClient) {
     idBySlug[t.slug] = t.id;
   }
 
+  // Contest metadata (name + start time) drives the curation quality score, so a
+  // problem's source round and era count — not just how many people solved it.
+  const contestById = new Map<number, CfContest>();
+  try {
+    for (const c of await fetchContests()) contestById.set(c.id, c);
+  } catch {
+    // contest.list is best-effort; quality degrades gracefully to popularity.
+  }
+
   const problems = await fetchProblemset();
   const rows = problems.map((p) => {
     const slug = pickTopicSlug(p.tags, monthBySlug);
+    const contest = p.contestId != null ? contestById.get(p.contestId) : undefined;
     return {
       source: "CODEFORCES" as const,
       externalId: cfExternalId(p),
@@ -39,6 +53,7 @@ export async function syncCodeforcesProblems(prisma: PrismaClient) {
       sourceRating: p.rating ?? null,
       sourceTags: p.tags,
       solvedCount: p.solvedCount ?? null,
+      quality: cfQuality(p.solvedCount, contest),
       topicId: slug ? idBySlug[slug] : null,
       syncedAt: new Date(),
     };
@@ -53,16 +68,16 @@ export async function syncCodeforcesProblems(prisma: PrismaClient) {
     created += r.count;
   }
 
-  // Backfill solveCount on already-existing rows (bulk, one statement per chunk).
+  // Backfill solveCount + quality on already-existing rows (bulk per chunk).
   const withCount = rows.filter((r) => r.solvedCount != null);
   for (let i = 0; i < withCount.length; i += 2000) {
     const values = withCount
       .slice(i, i + 2000)
-      .map((r) => `('${r.externalId}',${r.solvedCount})`)
+      .map((r) => `('${r.externalId}',${r.solvedCount},${r.quality})`)
       .join(",");
     await prisma.$executeRawUnsafe(
-      `UPDATE "Problem" AS p SET "solvedCount" = v.sc
-       FROM (VALUES ${values}) AS v(eid, sc)
+      `UPDATE "Problem" AS p SET "solvedCount" = v.sc, "quality" = v.q
+       FROM (VALUES ${values}) AS v(eid, sc, q)
        WHERE p."externalId" = v.eid AND p.source = 'CODEFORCES'`,
     );
   }
@@ -107,6 +122,7 @@ export async function syncAtcoderProblems(prisma: PrismaClient) {
     title: p.title || p.name,
     url: atProblemUrl(p),
     sourceRating: difficulties[p.id] ?? null,
+    quality: atQuality(p.contest_id, difficulties[p.id] != null),
     sourceTags: [] as string[],
     syncedAt: new Date(),
   }));
@@ -120,16 +136,16 @@ export async function syncAtcoderProblems(prisma: PrismaClient) {
     created += r.count;
   }
 
-  // Backfill difficulty onto existing rows (bulk).
-  const withRating = rows.filter((r) => r.sourceRating != null);
-  for (let i = 0; i < withRating.length; i += 2000) {
-    const values = withRating
+  // Backfill difficulty + quality onto existing rows (bulk). quality is always
+  // set; sourceRating may be null (unmodeled problems) → emit SQL NULL.
+  for (let i = 0; i < rows.length; i += 2000) {
+    const values = rows
       .slice(i, i + 2000)
-      .map((r) => `('${r.externalId}',${r.sourceRating})`)
+      .map((r) => `('${r.externalId}',${r.sourceRating ?? "NULL"},${r.quality})`)
       .join(",");
     await prisma.$executeRawUnsafe(
-      `UPDATE "Problem" AS p SET "sourceRating" = v.r
-       FROM (VALUES ${values}) AS v(eid, r)
+      `UPDATE "Problem" AS p SET "sourceRating" = v.r::int, "quality" = v.q::double precision
+       FROM (VALUES ${values}) AS v(eid, r, q)
        WHERE p."externalId" = v.eid AND p.source = 'ATCODER'`,
     );
   }
@@ -266,7 +282,7 @@ export async function generateCuratedProblems(prisma: PrismaClient) {
           sourceTags: { hasSome: topic.cfTags },
           sourceRating: { gte: floor, lte: cap },
         },
-        select: { id: true, sourceRating: true, solvedCount: true },
+        select: { id: true, sourceRating: true, quality: true },
       });
       const buckets = new Map<number, typeof cfProbs>();
       for (const p of cfProbs) {
@@ -277,9 +293,10 @@ export async function generateCuratedProblems(prisma: PrismaClient) {
       }
       const ramp: typeof cfProbs = [];
       for (const b of [...buckets.keys()].sort((a, z) => a - z)) {
+        // Best-quality problems per rating step (not just most-solved).
         const top = buckets
           .get(b)!
-          .sort((a, z) => (z.solvedCount ?? 0) - (a.solvedCount ?? 0))
+          .sort((a, z) => (z.quality ?? 0) - (a.quality ?? 0))
           .slice(0, CF_PER_BUCKET);
         ramp.push(...top);
       }

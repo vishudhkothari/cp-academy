@@ -61,6 +61,13 @@ export const CF_TAG_TO_TOPIC: Record<string, string> = {
   matrices: "number-theory",
 };
 
+export type CfContest = {
+  id: number;
+  name: string;
+  phase: string;
+  startTimeSeconds?: number;
+};
+
 async function cfFetch<T>(path: string): Promise<T> {
   const res = await fetch(`${CF_API}/${path}`, {
     headers: { "User-Agent": "cp-academy/0.1" },
@@ -92,6 +99,52 @@ export async function fetchUserStatus(handle: string): Promise<CfSubmission[]> {
 
 export async function fetchUserRating(handle: string): Promise<CfRatingChange[]> {
   return cfFetch<CfRatingChange[]>(`user.rating?handle=${encodeURIComponent(handle)}`);
+}
+
+export async function fetchContests(): Promise<CfContest[]> {
+  return cfFetch<CfContest[]>("contest.list");
+}
+
+// Contest-type weight: prefer rounds *designed* to teach the target level.
+// Educational rounds and Div. 3/4 have clean editorials and standard techniques;
+// novelty rounds (April Fools, Kotlin) make poor curriculum.
+export function cfContestTypeWeight(name: string): number {
+  const n = name.toLowerCase();
+  if (n.includes("educational")) return 1.25;
+  if (/div\.?\s*4/.test(n)) return 1.18;
+  if (/div\.?\s*3/.test(n)) return 1.12;
+  if (n.includes("global")) return 1.08;
+  if (/div\.?\s*2/.test(n)) return 1.0;
+  if (/div\.?\s*1/.test(n)) return 0.95;
+  if (n.includes("april fools") || n.includes("kotlin") || n.includes("q#") || n.includes("unrated"))
+    return 0.5;
+  return 0.85; // other rated rounds
+}
+
+// Recency tilt: modern problems better reflect what the learner will face, and
+// are generally higher quality — without erasing the classics entirely.
+export function cfEraWeight(startTimeSeconds?: number): number {
+  if (!startTimeSeconds) return 0.8;
+  const year = new Date(startTimeSeconds * 1000).getFullYear();
+  if (year >= 2021) return 1.0;
+  if (year >= 2018) return 0.92;
+  if (year >= 2015) return 0.82;
+  return 0.65;
+}
+
+// Composite curation quality (~0..1.3). Replaces raw solve count: popularity is
+// log-damped (so a trivial 100k-solve problem can't bury a 3k-solve gem), then
+// weighted by how good the source round is for learning and how modern it is.
+export function cfQuality(solvedCount: number | undefined, contest?: CfContest): number {
+  const s = solvedCount ?? 0;
+  const popularity = s > 0 ? Math.min(1, Math.log10(s) / 5) : 0; // 100k solves ≈ 1.0
+  const type = contest ? cfContestTypeWeight(contest.name) : 0.85;
+  const era = cfEraWeight(contest?.startTimeSeconds);
+  return popularity * type * era;
+}
+
+export function cfContestIdOf(externalId: string): number {
+  return parseInt(externalId.split("/")[0], 10);
 }
 
 export function cfExternalId(p: { contestId?: number; index: string }): string {

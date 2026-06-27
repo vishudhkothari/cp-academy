@@ -150,7 +150,8 @@ model Problem {
   url          String // deep-link to original statement (never mirrored)
   sourceRating Int? // CF rating / AtCoder difficulty
   sourceTags   String[] @default([])
-  solvedCount  Int? // CF solve count — proxy for how canonical/representative a problem is
+  solvedCount  Int? // raw solve count from the source (popularity signal)
+  quality      Float? // curation rank: log-damped popularity × contest-type × recency
   csesSection  String? // original CSES section, for the CSES-track view
   statementHtml String? // cached, rendered statement (fetched once from source for personal use)
 
@@ -174,6 +175,7 @@ model Problem {
 
   @@unique([source, externalId])
   @@index([source, sourceRating])
+  @@index([source, quality])
   @@index([topicId])
 }
 

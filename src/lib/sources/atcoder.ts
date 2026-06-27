@@ -57,6 +57,20 @@ export async function fetchAtcoderUserStatus(handle: string): Promise<AtSubmissi
   );
 }
 
+// AtCoder problems are consistently clean, so they get a high baseline. ABCs are
+// the best learning ground; a modeled difficulty means the problem is "vetted".
+// Scored on the same ~0..1.3 scale as Codeforces so the two mix sensibly.
+export function atQuality(contestId: string, hasDifficulty: boolean): number {
+  const c = contestId.toLowerCase();
+  let type = 0.85;
+  if (c.startsWith("abc")) type = 1.15;
+  else if (c.startsWith("arc")) type = 1.0;
+  else if (c.startsWith("agc")) type = 0.95;
+  else if (c.startsWith("dp") || c.startsWith("edu")) type = 1.2; // educational sets
+  const vetted = hasDifficulty ? 1.0 : 0.8;
+  return 0.7 * type * vetted;
+}
+
 export function atExternalId(p: { id: string }): string {
   return p.id;
 }
