@@ -182,23 +182,35 @@ export async function syncAtcoderUser(
 }
 
 // ── Curated ladders: the answer to "what do I solve next?" ────────────────────
-// Tighter, full-coverage curation. Each topic gets a short hand-feeling ladder:
-// CSES core (canonical order, capped) + a Codeforces ramp from the topic's tag
-// pool. CF problems are deduped GLOBALLY in curriculum order, so coarse tags
-// ("dp", "data structures") spread across the topics that use them — earlier
-// topics get the easier ones, later topics the harder ones — instead of one
-// topic hogging everything and the rest sitting empty.
-function capForMonth(month: number): number {
-  return Math.min(2500, 1000 + month * 130);
+// Each topic gets a coherent, full-coverage ladder built from the best sources:
+//   1. CSES core   — the gold-standard, hand-ordered canonical set.
+//   2. AtCoder EDU — the Educational DP Contest (dp_a…dp_z), the canonical way to
+//                    learn DP, attached to the DP foundations topic.
+//   3. Codeforces  — a difficulty RAMP inside a band that RISES with the month,
+//                    so early topics stay near the base while later ones push
+//                    toward Candidate Master. Deduped globally so coarse tags
+//                    ("dp", "data structures") spread across the topics that use
+//                    them instead of one topic hogging everything.
+//
+// The rising BAND (floor + cap, not just a cap) is the key quality fix: a
+// Month-8 topic should never serve 800-rated problems.
+function bandForMonth(month: number): { floor: number; cap: number } {
+  const cap = Math.min(2400, 1000 + month * 120);
+  const floor = Math.max(800, cap - 500);
+  return { floor, cap };
 }
 
-const CSES_CAP = 10;
-const CF_CAP = 8;
+const CSES_CAP = 12;
+const CF_CAP = 14;
+const CF_PER_BUCKET = 3; // depth per 100-rating step (CP-31-style volume)
+
+// The DP foundations topic receives the AtCoder Educational DP Contest.
+const EDU_DP_TOPIC = "dp-foundations";
 
 export async function generateCuratedProblems(prisma: PrismaClient) {
   const topics = await prisma.topic.findMany({
     orderBy: [{ month: "asc" }, { name: "asc" }],
-    select: { id: true, month: true, cfTags: true },
+    select: { id: true, slug: true, month: true, cfTags: true },
   });
 
   const cses = await fetchCsesProblemset();
@@ -210,7 +222,7 @@ export async function generateCuratedProblems(prisma: PrismaClient) {
   const usedCF = new Set<string>();
   let total = 0;
   for (const topic of topics) {
-    const cap = capForMonth(topic.month);
+    const { floor, cap } = bandForMonth(topic.month);
     const items: {
       topicId: string;
       problemId: string;
@@ -233,14 +245,26 @@ export async function generateCuratedProblems(prisma: PrismaClient) {
       items.push({ topicId: topic.id, problemId: p.id, order: order++, tier: "core", kind: "cses" });
     }
 
-    // 2) Codeforces ramp from the topic's tag pool — top-2 most-solved per
-    //    100-rating bucket, deduped globally, capped.
+    // 2) AtCoder Educational DP Contest (dp_a…dp_z, in order) for DP foundations.
+    if (topic.slug === EDU_DP_TOPIC) {
+      const eduDp = await prisma.problem.findMany({
+        where: { source: "ATCODER", externalId: { startsWith: "dp_" } },
+        select: { id: true, externalId: true },
+      });
+      eduDp.sort((a, b) => a.externalId.localeCompare(b.externalId));
+      for (const p of eduDp) {
+        items.push({ topicId: topic.id, problemId: p.id, order: order++, tier: "core", kind: "atcoder-dp" });
+      }
+    }
+
+    // 3) Codeforces ramp inside the month's RISING band — top-N most-solved per
+    //    100-rating bucket (depth + quality), deduped globally, capped.
     if (topic.cfTags.length) {
       const cfProbs = await prisma.problem.findMany({
         where: {
           source: "CODEFORCES",
           sourceTags: { hasSome: topic.cfTags },
-          sourceRating: { gte: 800, lte: cap },
+          sourceRating: { gte: floor, lte: cap },
         },
         select: { id: true, sourceRating: true, solvedCount: true },
       });
@@ -251,17 +275,19 @@ export async function generateCuratedProblems(prisma: PrismaClient) {
         if (!buckets.has(b)) buckets.set(b, []);
         buckets.get(b)!.push(p);
       }
-      const ladder: typeof cfProbs = [];
+      const ramp: typeof cfProbs = [];
       for (const b of [...buckets.keys()].sort((a, z) => a - z)) {
         const top = buckets
           .get(b)!
           .sort((a, z) => (z.solvedCount ?? 0) - (a.solvedCount ?? 0))
-          .slice(0, 2);
-        ladder.push(...top);
+          .slice(0, CF_PER_BUCKET);
+        ramp.push(...top);
       }
-      for (const p of ladder.slice(0, CF_CAP)) {
-        const r = p.sourceRating ?? 0;
-        const tier = r <= cap * 0.6 ? "core" : r <= cap * 0.85 ? "extra" : "challenge";
+      const span = Math.max(1, cap - floor);
+      for (const p of ramp.slice(0, CF_CAP)) {
+        const r = p.sourceRating ?? floor;
+        const frac = (r - floor) / span;
+        const tier = frac <= 0.5 ? "core" : frac <= 0.8 ? "extra" : "challenge";
         items.push({ topicId: topic.id, problemId: p.id, order: order++, tier, kind: "cf-ladder" });
         usedCF.add(p.id);
       }

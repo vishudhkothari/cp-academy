@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   Route,
+  TrendingUp,
   Trophy,
   BarChart3,
   BookMarked,
@@ -18,6 +19,7 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/learn", label: "Path", icon: Route },
+  { href: "/ladder", label: "Ladder", icon: TrendingUp },
   { href: "/review", label: "Review", icon: Brain },
   { href: "/contests", label: "Contests", icon: Trophy },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
