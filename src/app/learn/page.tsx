@@ -3,6 +3,7 @@ import { prisma } from "@/lib/db";
 import { ratingColor } from "@/lib/utils";
 import { SolveToggle } from "@/components/solve-toggle";
 import { ResyncButton } from "@/components/resync-button";
+import { RebuildButton } from "@/components/rebuild-button";
 
 export const dynamic = "force-dynamic";
 
@@ -91,8 +92,9 @@ export default async function LearnPage() {
         wonder what to solve.
       </p>
 
-      <div className="mt-4">
+      <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
         <ResyncButton />
+        <RebuildButton />
       </div>
 
       {next && (

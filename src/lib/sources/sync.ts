@@ -318,6 +318,22 @@ export async function generateCuratedProblems(prisma: PrismaClient) {
   return { topics: topics.length, curated: total };
 }
 
+// One-call refresh of the whole catalog + curated path. This is what the seed
+// did inline; exposing it lets the app rebuild the path on demand (the manual
+// "Rebuild" button) and nightly (the cron), instead of only at seed time —
+// which is why curation changes never showed up before.
+export async function rebuildCatalogAndPath(prisma: PrismaClient) {
+  const cf = await syncCodeforcesProblems(prisma);
+  let at = { fetched: 0, created: 0 };
+  try {
+    at = await syncAtcoderProblems(prisma);
+  } catch {
+    // AtCoder's community API is best-effort; the path still rebuilds without it.
+  }
+  const curated = await generateCuratedProblems(prisma);
+  return { cf, at, curated };
+}
+
 // ── Your Codeforces solves (authoritative verdicts) + rating history ──────────
 export async function syncCodeforcesUser(
   prisma: PrismaClient,

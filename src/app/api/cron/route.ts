@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { syncCodeforcesUser, syncAtcoderUser } from "@/lib/sources/sync";
+import { syncCodeforcesUser, syncAtcoderUser, rebuildCatalogAndPath } from "@/lib/sources/sync";
 import { recordProblemOutcome, decayMastery } from "@/lib/engine/mastery";
 import { ensureReviewCard } from "@/lib/engine/review";
 import { recomputeContestEntry } from "@/lib/engine/contest";
@@ -12,7 +12,7 @@ import { refreshDailyPlan } from "@/lib/engine/daily-plan";
 // plan. Wired to Vercel Cron (see vercel.json). Protected by CRON_SECRET: Vercel
 // sends `Authorization: Bearer <CRON_SECRET>`; we also allow `?secret=`.
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 function authorized(req: NextRequest): boolean {
   const secret = process.env.CRON_SECRET;
@@ -27,11 +27,28 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const summary: Record<string, unknown>[] = [];
+
+  // Refresh the catalog + curated path when it's gone stale (>3 days), so quality
+  // scores and ladders self-heal without a manual rebuild. Heavy, hence guarded.
+  const lastSync = await prisma.problem.findFirst({
+    where: { source: "CODEFORCES" },
+    orderBy: { syncedAt: "desc" },
+    select: { syncedAt: true },
+  });
+  const stale = !lastSync?.syncedAt || lastSync.syncedAt < new Date(Date.now() - 3 * 86400_000);
+  if (stale) {
+    try {
+      const r = await rebuildCatalogAndPath(prisma);
+      summary.push({ rebuild: { curated: r.curated.curated, cfCreated: r.cf.created, atCreated: r.at.created } });
+    } catch (e) {
+      summary.push({ rebuildError: (e as Error).message });
+    }
+  }
+
   const users = await prisma.user.findMany({
     select: { id: true, cfHandle: true, atcoderHandle: true },
   });
-
-  const summary: Record<string, unknown>[] = [];
   for (const user of users) {
     const recorded: string[] = [];
     let cfSnapshots = 0;
