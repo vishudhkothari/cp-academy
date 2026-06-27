@@ -34,9 +34,13 @@ const BUGS = [
 export function ReflectionForm({
   problemId,
   solved,
+  contestId,
+  inContest,
 }: {
   problemId: string;
   solved: boolean;
+  contestId?: string;
+  inContest?: boolean;
 }) {
   const [level, setLevel] = useState(0);
   const [bug, setBug] = useState<string>("");
@@ -55,6 +59,9 @@ export function ReflectionForm({
         failReason: lvl.reason,
         bugType: level === 3 && bug ? (bug as (typeof BUGS)[number]) : null,
         note: note.trim(),
+        contestId: contestId ?? null,
+        // Level 1 = solved within the contest window.
+        inContest: inContest ?? level === 1,
       });
       setSaved(true);
       setNote("");

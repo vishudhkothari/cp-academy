@@ -9,6 +9,7 @@ import {
   Trophy,
   BarChart3,
   BookMarked,
+  Brain,
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
@@ -17,6 +18,7 @@ import { cn } from "@/lib/utils";
 const NAV = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/learn", label: "Path", icon: Route },
+  { href: "/review", label: "Review", icon: Brain },
   { href: "/contests", label: "Contests", icon: Trophy },
   { href: "/analytics", label: "Analytics", icon: BarChart3 },
   { href: "/reference", label: "Reference", icon: BookMarked },

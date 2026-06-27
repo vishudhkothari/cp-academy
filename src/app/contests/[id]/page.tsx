@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { prisma } from "@/lib/db";
 import { ratingColor } from "@/lib/utils";
 import { ContestTimer } from "@/components/contest-timer";
+import { ReflectionForm } from "@/components/reflection-form";
 
 export const dynamic = "force-dynamic";
 
@@ -11,6 +12,17 @@ const AXIS: Record<string, { label: string; color: string; role: string }> = {
   TECHNIQUE: { label: "Technique", color: "var(--tech)", role: "Current topic" },
   IMPLEMENTATION: { label: "Implementation", color: "var(--impl)", role: "Implementation" },
 };
+
+// Time-derived state, kept out of render scope (react-hooks/purity).
+function contestTiming(startsAt: Date, durationMin: number) {
+  const endsAt = startsAt.getTime() + durationMin * 60000;
+  const nowMs = Date.now();
+  return {
+    endsAt,
+    live: nowMs < endsAt,
+    ageDays: Math.max(0, Math.floor((nowMs - endsAt) / 86400_000)),
+  };
+}
 
 export default async function ContestPage({
   params,
@@ -40,19 +52,25 @@ export default async function ContestPage({
   if (!contest) notFound();
 
   const user = await prisma.user.findFirst({ select: { id: true } });
-  const endsAt = contest.startsAt.getTime() + contest.durationMin * 60000;
-  const live = Date.now() < endsAt;
+  const { endsAt, live, ageDays } = contestTiming(contest.startsAt, contest.durationMin);
 
   const pids = contest.problems.map((p) => p.problemId);
-  const acs = user
-    ? await prisma.submission.findMany({
-        where: { userId: user.id, verdict: "AC", problemId: { in: pids } },
-        select: { problemId: true, createdAt: true },
-        orderBy: { createdAt: "asc" },
-      })
-    : [];
+  const [acs, contestReflections] = user
+    ? await Promise.all([
+        prisma.submission.findMany({
+          where: { userId: user.id, verdict: "AC", problemId: { in: pids } },
+          select: { problemId: true, createdAt: true },
+          orderBy: { createdAt: "asc" },
+        }),
+        prisma.reflection.findMany({
+          where: { userId: user.id, contestId: id },
+          select: { problemId: true },
+        }),
+      ])
+    : [[], []];
   const earliestAc = new Map<string, Date>();
   for (const a of acs) if (!earliestAc.has(a.problemId)) earliestAc.set(a.problemId, a.createdAt);
+  const reflected = new Set(contestReflections.map((r) => r.problemId));
 
   function statusOf(problemId: string): "in" | "up" | "none" {
     const ac = earliestAc.get(problemId);
@@ -135,30 +153,63 @@ export default async function ContestPage({
       </div>
 
       {!live && (
-        <div className="mt-8 rounded-lg border border-border bg-surface p-5">
-          <h2 className="text-sm font-medium">Result</h2>
-          <div className="mt-2 flex gap-5 text-sm">
-            <span className="text-ac">{inContest} solved in contest</span>
-            <span className="text-tech">{upsolved} upsolved</span>
-            <span className="text-muted">{backlog.length} still to upsolve</span>
-          </div>
-          {backlog.length > 0 && (
-            <div className="mt-4">
-              <div className="text-xs uppercase tracking-wide text-muted">Upsolve backlog</div>
-              <ul className="mt-2 space-y-1.5">
-                {backlog.map((cp) => (
-                  <li key={cp.id}>
-                    <Link
-                      href={`/problems/${cp.problem.id}`}
-                      className="text-sm hover:text-accent"
-                    >
-                      {String.fromCharCode(65 + cp.slot)}. {cp.problem.title} →
-                    </Link>
-                  </li>
-                ))}
-              </ul>
+        <div className="mt-8 space-y-4">
+          <div className="rounded-lg border border-border bg-surface p-5">
+            <h2 className="text-sm font-medium">Result</h2>
+            <div className="mt-2 flex gap-5 text-sm">
+              <span className="text-ac">{inContest} solved in contest</span>
+              <span className="text-tech">{upsolved} upsolved</span>
+              <span className="text-muted">{backlog.length} still to upsolve</span>
             </div>
-          )}
+            {backlog.length > 0 && (
+              <p className="mt-2 text-xs text-muted">
+                Upsolve backlog is {ageDays}d old. The real learning is bringing these home.
+              </p>
+            )}
+          </div>
+
+          {/* Per-problem reflection — grading lives in the upsolve (paper P3). */}
+          <div className="rounded-lg border border-border bg-surface p-5">
+            <h2 className="text-sm font-medium">Reflect on each problem</h2>
+            <p className="mt-1 text-xs text-muted">
+              One reflection per problem — this is what feeds your 3-axis mastery and
+              surfaces your real weakness.
+            </p>
+            <div className="mt-4 space-y-4">
+              {contest.problems.map((cp) => {
+                const st = statusOf(cp.problemId);
+                const a = AXIS[cp.targetAxis];
+                const isReflected = reflected.has(cp.problemId);
+                return (
+                  <div key={cp.id} className="rounded-md border border-border/70 p-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <Link
+                        href={`/problems/${cp.problem.id}`}
+                        className="truncate text-sm font-medium hover:text-accent"
+                      >
+                        {String.fromCharCode(65 + cp.slot)}. {cp.problem.title}
+                      </Link>
+                      <span className="shrink-0 text-xs" style={{ color: a.color }}>
+                        {a.label}
+                      </span>
+                    </div>
+                    <div className="mt-3">
+                      {isReflected ? (
+                        <div className="text-xs text-ac">Reflected ✓</div>
+                      ) : (
+                        <ReflectionForm
+                          problemId={cp.problem.id}
+                          solved={st !== "none"}
+                          contestId={contest.id}
+                          inContest={st === "in"}
+                        />
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -1,9 +1,46 @@
 import Link from "next/link";
+import { Brain, Target, ListChecks, Trophy, RotateCcw, type LucideIcon } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { ratingColor } from "@/lib/utils";
 import { getCoachInsights, type Insight } from "@/lib/engine/coach-insights";
+import { getTodayPlan, type PlanItem } from "@/lib/engine/daily-plan";
 
 export const dynamic = "force-dynamic";
+
+const PLAN_ICON: Record<PlanItem["type"], LucideIcon> = {
+  REVIEW: Brain,
+  WEAKNESS: Target,
+  PROBLEM: ListChecks,
+  CONTEST: Trophy,
+  UPSOLVE: RotateCcw,
+};
+
+function PlanPanel({ items }: { items: PlanItem[] }) {
+  if (items.length === 0) return null;
+  return (
+    <section className="mt-6">
+      <h2 className="text-sm font-medium uppercase tracking-wide text-muted">Today&apos;s plan</h2>
+      <div className="mt-3 space-y-2">
+        {items.map((it, i) => {
+          const Icon = PLAN_ICON[it.type];
+          return (
+            <Link
+              key={i}
+              href={it.href}
+              className="flex items-start gap-3 rounded-lg border border-border bg-surface p-3.5 hover:bg-surface-2/50"
+            >
+              <Icon size={16} className="mt-0.5 shrink-0 text-accent" />
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">{it.title}</div>
+                <div className="mt-0.5 text-xs text-muted">{it.reason}</div>
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
 
 const TONE: Record<Insight["tone"], string> = {
   ready: "var(--ac)",
@@ -119,6 +156,7 @@ export default async function DashboardPage() {
   const { solved, latestRating, nextUp, liveContest, pathSolved, pathTotal } = await getStats();
   const user = await prisma.user.findFirst({ select: { id: true } });
   const insights = user ? await getCoachInsights(prisma, user.id) : [];
+  const plan = user ? await getTodayPlan(prisma, user.id) : [];
 
   return (
     <div className="mx-auto max-w-4xl px-8 py-10">
@@ -126,6 +164,8 @@ export default async function DashboardPage() {
       <p className="mt-1 text-sm text-muted">What to work on today.</p>
 
       <CoachPanel insights={insights} />
+
+      <PlanPanel items={plan} />
 
       {/* Today */}
       <div className="mt-6 grid gap-4 sm:grid-cols-2">

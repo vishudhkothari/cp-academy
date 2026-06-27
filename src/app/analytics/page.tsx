@@ -1,7 +1,22 @@
 import { prisma } from "@/lib/db";
 import { ratingColor } from "@/lib/utils";
+import { getMasteryByTopic, getAxisAverages, AXES as MASTERY_AXES } from "@/lib/engine/mastery";
+import { computeReadiness } from "@/lib/engine/readiness";
 
 export const dynamic = "force-dynamic";
+
+const AXIS_META: Record<string, { label: string; color: string }> = {
+  OBSERVATION: { label: "Observation", color: "var(--obs)" },
+  TECHNIQUE: { label: "Technique", color: "var(--tech)" },
+  IMPLEMENTATION: { label: "Implementation", color: "var(--impl)" },
+};
+
+function masteryColor(score: number): string {
+  if (score <= 0) return "var(--surface-2)";
+  if (score < 0.34) return "rgba(239,94,107,.55)";
+  if (score < 0.67) return "rgba(240,161,58,.6)";
+  return "var(--ac)";
+}
 
 const FAIL_LABEL: Record<string, string> = {
   OBSERVATION: "Observation gap",
@@ -47,6 +62,17 @@ async function getData() {
     }),
   ]);
 
+  const [masteryByTopic, axisAvgs, readiness, readinessSnaps] = await Promise.all([
+    getMasteryByTopic(prisma, user.id),
+    getAxisAverages(prisma, user.id),
+    computeReadiness(prisma, user.id),
+    prisma.ratingSnapshot.findMany({
+      where: { userId: user.id, kind: "READINESS" },
+      orderBy: { takenAt: "asc" },
+      select: { value: true },
+    }),
+  ]);
+
   // CoachUsage has no problem relation — resolve topic names separately.
   const coachProblems = coach.length
     ? await prisma.problem.findMany({
@@ -60,7 +86,7 @@ async function getData() {
     topic: topicByPid.get(c.problemId) ?? "—",
   }));
 
-  return { solved, allSubs, reflections, coachTopics, ratings };
+  return { solved, allSubs, reflections, coachTopics, ratings, masteryByTopic, axisAvgs, readiness, readinessSnaps };
 }
 
 function masteryOf(arr: number[]) {
@@ -72,7 +98,8 @@ function masteryOf(arr: number[]) {
 export default async function AnalyticsPage() {
   const data = await getData();
   if (!data) return <div className="p-10 text-muted">No user.</div>;
-  const { solved, allSubs, reflections, coachTopics, ratings } = data;
+  const { solved, allSubs, reflections, coachTopics, ratings, masteryByTopic, axisAvgs, readiness, readinessSnaps } = data;
+  const hasMastery = axisAvgs.some((a) => a.topics > 0);
 
   // Per-axis mastery (proxy from topic lean + rating until manual tags accrue).
   const obs: number[] = [], tech: number[] = [], impl: number[] = [];
@@ -141,25 +168,126 @@ export default async function AnalyticsPage() {
         failing and train it.
       </p>
 
-      {/* Per-axis mastery */}
-      <section className="mt-6 grid gap-4 sm:grid-cols-3">
-        {AXES.map((a) => (
-          <div key={a.label} className="rounded-lg border border-border bg-surface p-5">
-            <div className="flex items-center gap-2">
-              <span className="h-2.5 w-2.5 rounded-full" style={{ background: a.color }} />
-              <span className="text-sm font-medium" style={{ color: a.color }}>
-                {a.label}
-              </span>
-            </div>
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-surface-2">
-              <div className="h-full rounded-full" style={{ width: `${a.m.pct}%`, background: a.color }} />
-            </div>
-            <div className="mt-2 text-xs text-muted">
-              {a.m.n ? `reached ${a.m.max} · ${a.m.n} solved` : "no data yet — solve problems here"}
-            </div>
+      {/* Readiness */}
+      <section className="mt-6 rounded-lg border border-border bg-surface p-5">
+        <div className="flex items-baseline justify-between gap-4">
+          <h2 className="text-sm font-medium">Readiness</h2>
+          <span className="text-xs text-muted">{readiness.band}</span>
+        </div>
+        <div className="mt-2 flex items-end gap-3">
+          <div className="text-3xl font-semibold" style={{ color: "var(--ac)" }}>
+            {readiness.score}
+            <span className="text-base text-muted">/100</span>
           </div>
-        ))}
+          {readinessSnaps.length > 1 && (
+            <svg viewBox="0 0 200 32" className="h-8 flex-1" preserveAspectRatio="none">
+              <polyline
+                fill="none"
+                stroke="var(--ac)"
+                strokeWidth="1.5"
+                points={readinessSnaps
+                  .map((s, i) => {
+                    const x = (i / Math.max(1, readinessSnaps.length - 1)) * 200;
+                    const y = 30 - (s.value / 100) * 28;
+                    return `${x},${y}`;
+                  })
+                  .join(" ")}
+              />
+            </svg>
+          )}
+        </div>
+        <div className="mt-2 text-xs text-muted">{readiness.reasons.join(" · ")}</div>
+        <div className="mt-1 text-xs text-muted">
+          Contests currently target ~{readiness.bandRating}-rated problems.
+        </div>
       </section>
+
+      {/* Per-axis mastery (real, from the mastery model — falls back to a rating
+          proxy until you've reflected on enough problems) */}
+      {hasMastery ? (
+        <section className="mt-6 grid gap-4 sm:grid-cols-3">
+          {axisAvgs.map((a) => {
+            const meta = AXIS_META[a.axis];
+            return (
+              <div key={a.axis} className="rounded-lg border border-border bg-surface p-5">
+                <div className="flex items-center gap-2">
+                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: meta.color }} />
+                  <span className="text-sm font-medium" style={{ color: meta.color }}>
+                    {meta.label}
+                  </span>
+                </div>
+                <div className="mt-3 h-2 overflow-hidden rounded-full bg-surface-2">
+                  <div
+                    className="h-full rounded-full"
+                    style={{ width: `${Math.round(a.score * 100)}%`, background: meta.color }}
+                  />
+                </div>
+                <div className="mt-2 text-xs text-muted">
+                  {a.topics ? `${Math.round(a.score * 100)}% · ${a.topics} topics` : "no data yet"}
+                </div>
+              </div>
+            );
+          })}
+        </section>
+      ) : (
+        <section className="mt-6 grid gap-4 sm:grid-cols-3">
+          {AXES.map((a) => (
+            <div key={a.label} className="rounded-lg border border-border bg-surface p-5">
+              <div className="flex items-center gap-2">
+                <span className="h-2.5 w-2.5 rounded-full" style={{ background: a.color }} />
+                <span className="text-sm font-medium" style={{ color: a.color }}>
+                  {a.label}
+                </span>
+              </div>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-surface-2">
+                <div className="h-full rounded-full" style={{ width: `${a.m.pct}%`, background: a.color }} />
+              </div>
+              <div className="mt-2 text-xs text-muted">
+                {a.m.n ? `reached ${a.m.max} · ${a.m.n} solved (proxy)` : "no data yet — reflect to build mastery"}
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+
+      {/* Skill tree — per-topic, per-axis mastery. Nothing like it on LeetCode. */}
+      {masteryByTopic.length > 0 && (
+        <section className="mt-8 rounded-lg border border-border bg-surface p-5">
+          <h2 className="text-sm font-medium">Skill tree</h2>
+          <p className="mt-1 text-xs text-muted">
+            Each topic across the three axes — find the exact cell that&apos;s failing.
+          </p>
+          <div className="mt-4 space-y-1.5">
+            <div className="flex items-center gap-2 pl-[40%] text-[10px] uppercase tracking-wide text-muted">
+              {MASTERY_AXES.map((axis) => (
+                <span key={axis} className="flex-1 text-center">
+                  {AXIS_META[axis].label.slice(0, 3)}
+                </span>
+              ))}
+            </div>
+            {masteryByTopic.map((t) => (
+              <div key={t.topicId} className="flex items-center gap-2">
+                <span className="w-[40%] truncate text-xs" title={t.topicName}>
+                  {t.topicName}
+                </span>
+                {MASTERY_AXES.map((axis) => (
+                  <span
+                    key={axis}
+                    className="flex h-6 flex-1 items-center justify-center rounded text-[10px] tabular-nums"
+                    style={{
+                      background: masteryColor(t.scores[axis]),
+                      color: t.scores[axis] >= 0.34 ? "#0b0f17" : "var(--muted)",
+                    }}
+                    title={`${AXIS_META[axis].label}: ${Math.round(t.scores[axis] * 100)}% (${t.attempts[axis]} attempts)`}
+                  >
+                    {t.attempts[axis] > 0 ? Math.round(t.scores[axis] * 100) : "·"}
+                  </span>
+                ))}
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* Activity heatmap */}
       <section className="mt-8 rounded-lg border border-border bg-surface p-5">

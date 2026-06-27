@@ -13,7 +13,12 @@ export async function middleware(req: NextRequest) {
   if (!pwd) return NextResponse.next();
 
   const { pathname } = req.nextUrl;
-  if (pathname.startsWith("/login") || pathname.startsWith("/api/auth")) {
+  // /api/cron is protected by its own CRON_SECRET, not the app password.
+  if (
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/api/auth") ||
+    pathname.startsWith("/api/cron")
+  ) {
     return NextResponse.next();
   }
 

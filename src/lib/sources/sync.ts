@@ -8,6 +8,13 @@ import {
   pickTopicSlug,
 } from "./codeforces";
 import { fetchCsesProblemset, CSES_SECTION_TO_TOPIC } from "./cses";
+import {
+  fetchAtcoderProblems,
+  fetchAtcoderDifficulties,
+  fetchAtcoderUserStatus,
+  atExternalId,
+  atProblemUrl,
+} from "./atcoder";
 
 // ── Codeforces problemset → catalog (metadata + topic mapping + solve count) ──
 export async function syncCodeforcesProblems(prisma: PrismaClient) {
@@ -83,6 +90,95 @@ export async function syncCsesProblems(prisma: PrismaClient) {
   });
   const r = await prisma.problem.createMany({ data: rows, skipDuplicates: true });
   return { fetched: rows.length, created: r.count };
+}
+
+// ── AtCoder problemset → catalog (metadata + difficulty as sourceRating) ──────
+// AtCoder has no tags, so problems land untopiced; difficulty (where modeled)
+// becomes sourceRating. They still flow through the catalog, contests, and the
+// readiness "hardest solve" signal.
+export async function syncAtcoderProblems(prisma: PrismaClient) {
+  const [problems, difficulties] = await Promise.all([
+    fetchAtcoderProblems(),
+    fetchAtcoderDifficulties().catch(() => ({}) as Record<string, number>),
+  ]);
+  const rows = problems.map((p) => ({
+    source: "ATCODER" as const,
+    externalId: atExternalId(p),
+    title: p.title || p.name,
+    url: atProblemUrl(p),
+    sourceRating: difficulties[p.id] ?? null,
+    sourceTags: [] as string[],
+    syncedAt: new Date(),
+  }));
+
+  let created = 0;
+  for (let i = 0; i < rows.length; i += 1000) {
+    const r = await prisma.problem.createMany({
+      data: rows.slice(i, i + 1000),
+      skipDuplicates: true,
+    });
+    created += r.count;
+  }
+
+  // Backfill difficulty onto existing rows (bulk).
+  const withRating = rows.filter((r) => r.sourceRating != null);
+  for (let i = 0; i < withRating.length; i += 2000) {
+    const values = withRating
+      .slice(i, i + 2000)
+      .map((r) => `('${r.externalId}',${r.sourceRating})`)
+      .join(",");
+    await prisma.$executeRawUnsafe(
+      `UPDATE "Problem" AS p SET "sourceRating" = v.r
+       FROM (VALUES ${values}) AS v(eid, r)
+       WHERE p."externalId" = v.eid AND p.source = 'ATCODER'`,
+    );
+  }
+  return { fetched: rows.length, created };
+}
+
+// ── Your AtCoder solves (authoritative verdicts) ──────────────────────────────
+export async function syncAtcoderUser(
+  prisma: PrismaClient,
+  userId: string,
+  handle: string,
+) {
+  const subs = await fetchAtcoderUserStatus(handle);
+  const solvedAt = new Map<string, number>();
+  for (const s of subs) {
+    if (s.result !== "AC") continue;
+    const prev = solvedAt.get(s.problem_id);
+    if (prev === undefined || s.epoch_second < prev) solvedAt.set(s.problem_id, s.epoch_second);
+  }
+
+  const known = await prisma.problem.findMany({
+    where: { source: "ATCODER", externalId: { in: [...solvedAt.keys()] } },
+    select: { id: true, externalId: true },
+  });
+
+  let recorded = 0;
+  const recordedProblemIds: string[] = [];
+  for (const p of known) {
+    const ts = solvedAt.get(p.externalId)!;
+    const existing = await prisma.submission.findFirst({
+      where: { userId, problemId: p.id, origin: "OJ_SYNCED", verdict: "AC" },
+      select: { id: true },
+    });
+    if (existing) continue;
+    await prisma.submission.create({
+      data: {
+        userId,
+        problemId: p.id,
+        language: "CPP",
+        source: "",
+        verdict: "AC",
+        origin: "OJ_SYNCED",
+        createdAt: new Date(ts * 1000),
+      },
+    });
+    recorded++;
+    recordedProblemIds.push(p.id);
+  }
+  return { solved: known.length, recorded, recordedProblemIds };
 }
 
 // ── Curated ladders: the answer to "what do I solve next?" ────────────────────
@@ -201,6 +297,7 @@ export async function syncCodeforcesUser(
   });
 
   let recorded = 0;
+  const recordedProblemIds: string[] = [];
   for (const p of known) {
     const ts = solvedAt.get(p.externalId)!;
     const existing = await prisma.submission.findFirst({
@@ -220,6 +317,7 @@ export async function syncCodeforcesUser(
       },
     });
     recorded++;
+    recordedProblemIds.push(p.id);
   }
 
   const ratings = await fetchUserRating(handle);
@@ -236,5 +334,5 @@ export async function syncCodeforcesUser(
     });
     snapshots++;
   }
-  return { solved: known.length, recorded, snapshots };
+  return { solved: known.length, recorded, snapshots, recordedProblemIds };
 }

@@ -1,9 +1,29 @@
 import Link from "next/link";
-import { Trophy, Plus } from "lucide-react";
+import { Trophy } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { createWeeklyContest } from "@/app/actions";
+import { createContest } from "@/app/actions";
 
 export const dynamic = "force-dynamic";
+
+const CADENCES: { kind: "DAILY" | "WEEKLY" | "MONTHLY" | "QUARTERLY_MOCK"; label: string; sub: string }[] = [
+  { kind: "DAILY", label: "Daily mini", sub: "45 min · 2 problems" },
+  { kind: "WEEKLY", label: "Weekly", sub: "90 min · 3 problems" },
+  { kind: "MONTHLY", label: "Monthly", sub: "3 hr · 5 problems" },
+  { kind: "QUARTERLY_MOCK", label: "Mock ICPC", sub: "5 hr · 5 problems" },
+];
+
+const KIND_LABEL: Record<string, string> = {
+  DAILY: "Daily",
+  WEEKLY: "Weekly",
+  MONTHLY: "Monthly",
+  QUARTERLY_MOCK: "Mock ICPC",
+};
+
+// Time-derived state, kept out of render scope (react-hooks/purity).
+function contestTiming(startsAt: Date, durationMin: number) {
+  const endsAt = startsAt.getTime() + durationMin * 60000;
+  return { endsAt, live: Date.now() < endsAt };
+}
 
 export default async function ContestsPage() {
   const user = await prisma.user.findFirst({ select: { id: true } });
@@ -25,22 +45,26 @@ export default async function ContestsPage() {
 
   return (
     <div className="mx-auto max-w-3xl px-8 py-10">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Contests</h1>
-          <p className="mt-1 text-sm text-muted">
-            90 minutes, 3 problems — one per axis. You&apos;re not meant to solve all
-            three; <strong className="text-foreground">upsolving is where the learning is</strong>.
-          </p>
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">Contests</h1>
+        <p className="mt-1 text-sm text-muted">
+          Problems target one axis each and adapt to your readiness band. You&apos;re
+          not meant to solve them all;{" "}
+          <strong className="text-foreground">upsolving is where the learning is</strong>.
+        </p>
+        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          {CADENCES.map((c) => (
+            <form key={c.kind} action={createContest.bind(null, c.kind)}>
+              <button
+                type="submit"
+                className="w-full rounded-lg border border-border bg-surface p-3 text-left hover:border-accent hover:bg-surface-2/50"
+              >
+                <div className="text-sm font-medium">{c.label}</div>
+                <div className="mt-0.5 text-xs text-muted">{c.sub}</div>
+              </button>
+            </form>
+          ))}
         </div>
-        <form action={createWeeklyContest}>
-          <button
-            type="submit"
-            className="inline-flex items-center gap-1.5 rounded-md bg-accent px-4 py-2 text-sm font-medium text-accent-foreground hover:opacity-90"
-          >
-            <Plus size={15} /> Start weekly contest
-          </button>
-        </form>
       </div>
 
       <div className="mt-8 space-y-3">
@@ -50,8 +74,7 @@ export default async function ContestsPage() {
           </div>
         )}
         {contests.map((c) => {
-          const endsAt = c.startsAt.getTime() + c.durationMin * 60000;
-          const live = Date.now() < endsAt;
+          const { endsAt, live } = contestTiming(c.startsAt, c.durationMin);
           let inContest = 0;
           let upsolved = 0;
           for (const p of c.problems) {
@@ -69,7 +92,12 @@ export default async function ContestsPage() {
               <div className="flex items-center gap-3">
                 <Trophy size={18} className="text-muted" />
                 <div>
-                  <div className="text-sm font-medium">{c.title}</div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-medium">{c.title}</span>
+                    <span className="rounded bg-surface-2 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted">
+                      {KIND_LABEL[c.kind] ?? c.kind}
+                    </span>
+                  </div>
                   <div className="text-xs text-muted">
                     {c.startsAt.toLocaleString("en-GB")} · {c.durationMin} min
                   </div>

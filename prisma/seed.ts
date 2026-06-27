@@ -3,8 +3,10 @@ import { topics } from "./seed/topics";
 import {
   syncCodeforcesProblems,
   syncCsesProblems,
+  syncAtcoderProblems,
   generateCuratedProblems,
   syncCodeforcesUser,
+  syncAtcoderUser,
 } from "../src/lib/sources/sync";
 
 const prisma = new PrismaClient();
@@ -55,6 +57,14 @@ async function main() {
   const c = await syncCsesProblems(prisma);
   console.log(`  ✓ fetched ${c.fetched}, newly created ${c.created}`);
 
+  console.log("→ Syncing AtCoder problemset (community API)…");
+  try {
+    const a = await syncAtcoderProblems(prisma);
+    console.log(`  ✓ fetched ${a.fetched}, newly created ${a.created}`);
+  } catch (e) {
+    console.warn(`  ! AtCoder problem sync skipped: ${(e as Error).message}`);
+  }
+
   console.log("→ Generating curated ladders…");
   const g = await generateCuratedProblems(prisma);
   console.log(`  ✓ ${g.curated} curated problems across ${g.topics} topics`);
@@ -67,6 +77,14 @@ async function main() {
     );
   } catch (e) {
     console.warn(`  ! user sync skipped: ${(e as Error).message}`);
+  }
+
+  console.log(`→ Syncing your AtCoder solves (@${ATCODER_HANDLE})…`);
+  try {
+    const ua = await syncAtcoderUser(prisma, user.id, ATCODER_HANDLE);
+    console.log(`  ✓ solved ${ua.solved}, recorded ${ua.recorded}`);
+  } catch (e) {
+    console.warn(`  ! AtCoder user sync skipped: ${(e as Error).message}`);
   }
 }
 
