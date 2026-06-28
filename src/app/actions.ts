@@ -10,6 +10,7 @@ import { recordProblemOutcome } from "@/lib/engine/mastery";
 import { ensureReviewCard, gradeReview, type ReviewGrade } from "@/lib/engine/review";
 import { snapshotReadiness } from "@/lib/engine/readiness";
 import { refreshDailyPlan } from "@/lib/engine/daily-plan";
+import { weeklySchedule } from "@/lib/engine/schedule";
 
 // Apply engine side-effects for a freshly-solved problem (mastery + a review
 // card). Idempotent for reviews; mastery should be called once per solve event.
@@ -139,6 +140,27 @@ export async function deleteTemplate(id: string) {
 
 export async function createContest(kind: ContestKind) {
   const user = await currentUser();
+
+  // The WEEKLY is a fixed appointment (discipline). It can only be started inside
+  // its open window, and only once per week — outside that, this is a no-op and
+  // the page shows the countdown instead.
+  if (kind === "WEEKLY") {
+    const sch = weeklySchedule(user.weeklyDay, user.weeklyHour);
+    const thisWeek = await prisma.contest.findFirst({
+      where: { kind: "WEEKLY", startsAt: { gte: sch.thisSlot } },
+      orderBy: { startsAt: "desc" },
+      select: { id: true },
+    });
+    if (thisWeek) {
+      revalidatePath("/contests");
+      redirect(`/contests/${thisWeek.id}`); // already started this week — resume it
+    }
+    if (!sch.isOpen) {
+      revalidatePath("/contests");
+      redirect("/contests"); // slot not open — wait for the scheduled time
+    }
+  }
+
   const id = await generateContest(prisma, user.id, kind);
   revalidatePath("/contests");
   redirect(`/contests/${id}`);
@@ -147,6 +169,17 @@ export async function createContest(kind: ContestKind) {
 // Kept for the existing weekly-contest form button.
 export async function createWeeklyContest() {
   return createContest("WEEKLY");
+}
+
+// Set the user's fixed weekly-contest slot (day + hour, IST).
+export async function setWeeklySlot(formData: FormData) {
+  const user = await currentUser();
+  const day = Number(formData.get("day"));
+  const hour = Number(formData.get("hour"));
+  if (Number.isInteger(day) && day >= 0 && day <= 6 && Number.isInteger(hour) && hour >= 0 && hour <= 23) {
+    await prisma.user.update({ where: { id: user.id }, data: { weeklyDay: day, weeklyHour: hour } });
+  }
+  revalidatePath("/contests");
 }
 
 // Shared post-sync engine refresh: credit mastery + schedule reviews for newly

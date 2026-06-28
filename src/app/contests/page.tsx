@@ -1,13 +1,15 @@
 import Link from "next/link";
-import { Trophy } from "lucide-react";
+import { Trophy, CalendarClock } from "lucide-react";
 import { prisma } from "@/lib/db";
-import { createContest } from "@/app/actions";
+import { createContest, setWeeklySlot } from "@/app/actions";
+import { weeklySchedule, DAY_NAMES, formatHour } from "@/lib/engine/schedule";
+import { WeeklyCountdown } from "@/components/weekly-countdown";
 
 export const dynamic = "force-dynamic";
 
-const CADENCES: { kind: "DAILY" | "WEEKLY" | "MONTHLY" | "QUARTERLY_MOCK"; label: string; sub: string }[] = [
+// Start-now cadences. The WEEKLY is handled separately as a fixed appointment.
+const CADENCES: { kind: "DAILY" | "MONTHLY" | "QUARTERLY_MOCK"; label: string; sub: string }[] = [
   { kind: "DAILY", label: "Daily mini", sub: "45 min · 2 problems" },
-  { kind: "WEEKLY", label: "Weekly", sub: "90 min · 3 problems" },
   { kind: "MONTHLY", label: "Monthly", sub: "3 hr · 5 problems" },
   { kind: "QUARTERLY_MOCK", label: "Mock ICPC", sub: "5 hr · 5 problems" },
 ];
@@ -25,8 +27,136 @@ function contestTiming(startsAt: Date, durationMin: number) {
   return { endsAt, live: Date.now() < endsAt };
 }
 
+function WeeklyPanel({
+  day,
+  hour,
+  weekly,
+}: {
+  day: number;
+  hour: number;
+  weekly: { id: string; live: boolean; startsAt: Date } | null;
+}) {
+  const sch = weeklySchedule(day, hour);
+  const doneThisWeek = !!weekly;
+
+  // Resolve the panel's state once.
+  let tone = "var(--muted)";
+  let status = "";
+  let countdown: { target: Date; prefix: string } | null = null;
+  let startable = false;
+
+  if (weekly?.live) {
+    tone = "var(--accent)";
+    status = "In progress";
+  } else if (doneThisWeek) {
+    tone = "var(--ac)";
+    status = "Done this week";
+    countdown = { target: sch.nextSlot, prefix: "next in " };
+  } else if (sch.isOpen) {
+    tone = "var(--ac)";
+    status = "Open now";
+    startable = true;
+    countdown = { target: sch.openUntil, prefix: "closes in " };
+  } else {
+    tone = "var(--muted)";
+    status = "Scheduled";
+    countdown = { target: sch.nextSlot, prefix: "opens in " };
+  }
+
+  return (
+    <section className="mt-6 rounded-xl border border-border bg-surface p-5">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <CalendarClock size={18} className="mt-0.5 shrink-0" style={{ color: tone }} />
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-sm font-medium">Weekly contest</h2>
+              <span className="rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide" style={{ color: tone }}>
+                {status}
+              </span>
+            </div>
+            <p className="mt-1 text-sm text-muted">
+              Every <strong className="text-foreground">{sch.label}</strong>
+              {countdown && (
+                <>
+                  {" · "}
+                  <WeeklyCountdown target={countdown.target.toISOString()} prefix={countdown.prefix} />
+                </>
+              )}
+            </p>
+            <p className="mt-0.5 text-xs text-muted">90 min · 3 problems · a fixed slot keeps you honest.</p>
+          </div>
+        </div>
+
+        <div className="shrink-0">
+          {weekly ? (
+            <Link
+              href={`/contests/${weekly.id}`}
+              className="rounded-lg border border-accent/40 bg-accent/10 px-4 py-2 text-sm font-medium hover:bg-accent/15"
+            >
+              {weekly.live ? "Resume →" : "Review →"}
+            </Link>
+          ) : startable ? (
+            <form action={createContest.bind(null, "WEEKLY")}>
+              <button
+                type="submit"
+                className="rounded-lg border border-accent bg-accent px-4 py-2 text-sm font-medium text-accent-foreground hover:opacity-90"
+              >
+                Start now
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              disabled
+              title={`Opens ${sch.label}`}
+              className="cursor-not-allowed rounded-lg border border-border px-4 py-2 text-sm font-medium text-muted opacity-60"
+            >
+              Locked
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Inline slot picker — make it your appointment. */}
+      <form action={setWeeklySlot} className="mt-4 flex flex-wrap items-center gap-2 border-t border-border pt-4 text-xs text-muted">
+        <span>Change slot:</span>
+        <select name="day" defaultValue={day} className="rounded-md border border-border bg-surface-2 px-2 py-1 text-foreground">
+          {DAY_NAMES.map((n, i) => (
+            <option key={i} value={i}>{n}</option>
+          ))}
+        </select>
+        <select name="hour" defaultValue={hour} className="rounded-md border border-border bg-surface-2 px-2 py-1 text-foreground">
+          {Array.from({ length: 24 }, (_, h) => (
+            <option key={h} value={h}>{formatHour(h)}</option>
+          ))}
+        </select>
+        <span>IST</span>
+        <button type="submit" className="rounded-md border border-border px-2.5 py-1 hover:bg-surface-2">
+          Save
+        </button>
+      </form>
+    </section>
+  );
+}
+
 export default async function ContestsPage() {
-  const user = await prisma.user.findFirst({ select: { id: true } });
+  const user = await prisma.user.findFirst({
+    select: { id: true, weeklyDay: true, weeklyHour: true },
+  });
+
+  // This week's weekly (if already started), for the appointment panel.
+  let weekly: { id: string; live: boolean; startsAt: Date } | null = null;
+  if (user) {
+    const sch = weeklySchedule(user.weeklyDay, user.weeklyHour);
+    const w = await prisma.contest.findFirst({
+      where: { kind: "WEEKLY", startsAt: { gte: sch.thisSlot } },
+      orderBy: { startsAt: "desc" },
+      select: { id: true, startsAt: true, durationMin: true },
+    });
+    if (w) weekly = { id: w.id, startsAt: w.startsAt, live: contestTiming(w.startsAt, w.durationMin).live };
+  }
+
   const contests = await prisma.contest.findMany({
     orderBy: { startsAt: "desc" },
     include: { problems: { select: { problemId: true } } },
@@ -52,7 +182,13 @@ export default async function ContestsPage() {
           not meant to solve them all;{" "}
           <strong className="text-foreground">upsolving is where the learning is</strong>.
         </p>
-        <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+      </div>
+
+      {user && <WeeklyPanel day={user.weeklyDay} hour={user.weeklyHour} weekly={weekly} />}
+
+      <div className="mt-6">
+        <h2 className="text-sm font-medium uppercase tracking-wide text-muted">Or train any time</h2>
+        <div className="mt-3 grid grid-cols-3 gap-2">
           {CADENCES.map((c) => (
             <form key={c.kind} action={createContest.bind(null, c.kind)}>
               <button
@@ -70,7 +206,7 @@ export default async function ContestsPage() {
       <div className="mt-8 space-y-3">
         {contests.length === 0 && (
           <div className="rounded-lg border border-dashed border-border p-10 text-center text-sm text-muted">
-            No contests yet. Start your first weekly contest above.
+            No contests yet. Your weekly opens at its scheduled slot above.
           </div>
         )}
         {contests.map((c) => {

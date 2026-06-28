@@ -114,6 +114,9 @@ model User {
 
   pathStartDate DateTime? // when the 1-year curriculum clock started (lazy-set on first plan build; reset to restart the year)
 
+  weeklyDay  Int @default(0)  // fixed weekly-contest slot: day of week, 0=Sun..6=Sat (JS getDay), in IST
+  weeklyHour Int @default(20) // fixed weekly-contest slot: hour 0..23, IST (default 8 PM)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

@@ -3,6 +3,7 @@ import { countDueReviews } from "./review";
 import { weakestCell, type Axis } from "./mastery";
 import { computeReadiness } from "./readiness";
 import { computePace, paceStatus } from "./pace";
+import { weeklySchedule } from "./schedule";
 
 // How many path problems to surface as concrete cards in a single day's plan,
 // even if the quota is higher (keeps the list readable; the rest stay on /learn).
@@ -132,20 +133,26 @@ export async function buildDailyPlan(
     });
   }
 
-  // 4) Contest cadence — nudge a weekly if it's been ~7 days.
-  const lastWeekly = await prisma.contest.findFirst({
-    where: { kind: "WEEKLY" },
-    orderBy: { startsAt: "desc" },
-    select: { startsAt: true },
+  // 4) Weekly contest — a fixed appointment. Nudge only when the slot is OPEN and
+  //    this week's hasn't been run yet (discipline: it happens at its time).
+  const slotUser = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { weeklyDay: true, weeklyHour: true },
   });
-  const weekAgo = new Date(Date.now() - 7 * 86400_000);
-  if (readiness.band !== "Not yet" && (!lastWeekly || lastWeekly.startsAt < weekAgo)) {
-    items.push({
-      type: "CONTEST",
-      title: "Run a weekly contest",
-      reason: "Time pressure is the differentiator — 90 min, 3 problems, upsolve the rest.",
-      href: "/contests",
+  if (slotUser && readiness.band !== "Not yet") {
+    const sch = weeklySchedule(slotUser.weeklyDay, slotUser.weeklyHour);
+    const doneThisWeek = await prisma.contest.findFirst({
+      where: { kind: "WEEKLY", startsAt: { gte: sch.thisSlot } },
+      select: { id: true },
     });
+    if (sch.isOpen && !doneThisWeek) {
+      items.push({
+        type: "CONTEST",
+        title: "Weekly contest is open — start now",
+        reason: `Your ${sch.label} slot is live · 90 min, 3 problems, upsolve the rest.`,
+        href: "/contests",
+      });
+    }
   }
 
   // 5) Upsolve backlog — unsolved contest problems, oldest first (paper P3).
