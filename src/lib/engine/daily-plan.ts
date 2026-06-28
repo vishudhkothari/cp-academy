@@ -2,6 +2,11 @@ import type { PrismaClient } from "@prisma/client";
 import { countDueReviews } from "./review";
 import { weakestCell, type Axis } from "./mastery";
 import { computeReadiness } from "./readiness";
+import { computePace, paceStatus } from "./pace";
+
+// How many path problems to surface as concrete cards in a single day's plan,
+// even if the quota is higher (keeps the list readable; the rest stay on /learn).
+const MAX_PATH_CARDS = 6;
 
 // The "tell me what to do today" engine (docs/04-ENGINES.md §3). A transparent
 // priority cascade — every item carries a one-line `reason`. Output is persisted
@@ -9,11 +14,15 @@ import { computeReadiness } from "./readiness";
 // rebuilds it each morning.
 
 export type PlanItem = {
-  type: "REVIEW" | "WEAKNESS" | "PROBLEM" | "CONTEST" | "UPSOLVE";
+  type: "PACE" | "REVIEW" | "WEAKNESS" | "PROBLEM" | "CONTEST" | "UPSOLVE";
   title: string;
   reason: string;
   href: string;
 };
+
+function fmtDate(d: Date): string {
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+}
 
 const AXIS_LABEL: Record<Axis, string> = {
   OBSERVATION: "observation",
@@ -42,6 +51,23 @@ export async function buildDailyPlan(
 ): Promise<PlanItem[]> {
   const items: PlanItem[] = [];
   const solved = await solvedSet(prisma, userId);
+
+  // 0) Pace header — the finish-in-one-year target. Sets today's quota and shows
+  //    whether you're on track to clear the whole curriculum within the year.
+  const pace = await computePace(prisma, userId);
+  if (pace.total > 0 && !pace.finished) {
+    const st = paceStatus(pace);
+    const goal =
+      pace.todayRemaining > 0
+        ? `Solve ${pace.todayRemaining} path problem${pace.todayRemaining > 1 ? "s" : ""} today`
+        : `Today's ${pace.perDayNeeded} done — keep momentum`;
+    items.push({
+      type: "PACE",
+      title: goal,
+      reason: `${pace.done}/${pace.total} done (${Math.round(pace.pct * 100)}%) · ${st.label} · finish-by-${fmtDate(pace.targetDate)} needs ${pace.perDayNeeded}/day.`,
+      href: "/learn",
+    });
+  }
 
   // 1) Due reviews first — retention beats new volume (paper P12).
   const due = await countDueReviews(prisma, userId);
@@ -81,7 +107,9 @@ export async function buildDailyPlan(
     }
   }
 
-  // 3) Curriculum progression — the next unsolved problem on the curated path.
+  // 3) Curriculum progression — serve TODAY'S QUOTA of unsolved path problems in
+  //    order (not just the next one), so clearing the plan = staying on the
+  //    one-year track. Capped for readability; the rest live on /learn.
   const curated = await prisma.curatedProblem.findMany({
     orderBy: [{ topic: { month: "asc" } }, { topic: { name: "asc" } }, { order: "asc" }],
     select: {
@@ -90,13 +118,17 @@ export async function buildDailyPlan(
       topic: { select: { name: true, month: true } },
     },
   });
-  const nextPath = curated.find((c) => !solved.has(c.problemId));
-  if (nextPath) {
+  const quota = Math.min(Math.max(pace.todayRemaining, pace.finished ? 0 : 1), MAX_PATH_CARDS);
+  let served = 0;
+  for (const c of curated) {
+    if (served >= quota) break;
+    if (solved.has(c.problemId)) continue;
+    served++;
     items.push({
       type: "PROBLEM",
-      title: nextPath.problem.title,
-      reason: `Next on your path · Month ${nextPath.topic.month} · ${nextPath.topic.name}.`,
-      href: `/problems/${nextPath.problem.id}`,
+      title: c.problem.title,
+      reason: `Path ${served}/${quota} today · Month ${c.topic.month} · ${c.topic.name}.`,
+      href: `/problems/${c.problem.id}`,
     });
   }
 

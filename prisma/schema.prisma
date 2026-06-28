@@ -112,6 +112,8 @@ model User {
   cfHandle      String?
   atcoderHandle String?
 
+  pathStartDate DateTime? // when the 1-year curriculum clock started (lazy-set on first plan build; reset to restart the year)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

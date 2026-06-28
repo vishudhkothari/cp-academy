@@ -1,19 +1,75 @@
 import Link from "next/link";
-import { Brain, Target, ListChecks, Trophy, RotateCcw, type LucideIcon } from "lucide-react";
+import { Brain, Target, ListChecks, Trophy, RotateCcw, CalendarClock, type LucideIcon } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { ratingColor } from "@/lib/utils";
 import { getCoachInsights, type Insight } from "@/lib/engine/coach-insights";
 import { getTodayPlan, type PlanItem } from "@/lib/engine/daily-plan";
+import { computePace, paceStatus, type Pace } from "@/lib/engine/pace";
 
 export const dynamic = "force-dynamic";
 
 const PLAN_ICON: Record<PlanItem["type"], LucideIcon> = {
+  PACE: CalendarClock,
   REVIEW: Brain,
   WEAKNESS: Target,
   PROBLEM: ListChecks,
   CONTEST: Trophy,
   UPSOLVE: RotateCcw,
 };
+
+const PACE_TONE = { ready: "var(--ac)", warn: "var(--accent)", behind: "var(--wa)" } as const;
+
+function PaceBanner({ pace }: { pace: Pace }) {
+  const st = paceStatus(pace);
+  const color = PACE_TONE[st.tone];
+  const pct = Math.round(pace.pct * 100);
+  return (
+    <section className="mt-6 rounded-xl border border-border bg-surface p-5">
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 className="text-sm font-medium uppercase tracking-wide text-muted">One-year plan</h2>
+        <span className="text-xs font-medium" style={{ color }}>
+          {st.label}
+        </span>
+      </div>
+
+      <div className="mt-3 flex items-baseline gap-2">
+        <span className="text-3xl font-semibold">{pace.done}</span>
+        <span className="text-sm text-muted">/ {pace.total} curated problems · {pct}%</span>
+      </div>
+
+      {/* progress: solved (color) vs where you should be by now (ticked) */}
+      <div className="relative mt-3 h-2 overflow-hidden rounded-full bg-surface-2">
+        <div className="h-full rounded-full transition-all" style={{ width: `${pct}%`, background: color }} />
+        {pace.expectedDone > 0 && pace.expectedDone < pace.total && (
+          <div
+            className="absolute top-0 h-full w-px bg-foreground/70"
+            style={{ left: `${Math.round((pace.expectedDone / pace.total) * 100)}%` }}
+            title={`On-pace marker: ${pace.expectedDone}`}
+          />
+        )}
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
+        <div>
+          <div className="font-semibold" style={{ color }}>
+            {pace.finished ? "—" : pace.todayRemaining > 0 ? pace.todayRemaining : "✓"}
+          </div>
+          <div className="text-xs text-muted">to solve today</div>
+        </div>
+        <div>
+          <div className="font-semibold">{pace.perDayNeeded}/day</div>
+          <div className="text-xs text-muted">to finish on time</div>
+        </div>
+        <div>
+          <div className="font-semibold">{pace.daysLeft}d</div>
+          <div className="text-xs text-muted">
+            left · target {pace.targetDate.toLocaleDateString("en-US", { month: "short", year: "numeric" })}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function PlanPanel({ items }: { items: PlanItem[] }) {
   if (items.length === 0) return null;
@@ -157,11 +213,14 @@ export default async function DashboardPage() {
   const user = await prisma.user.findFirst({ select: { id: true } });
   const insights = user ? await getCoachInsights(prisma, user.id) : [];
   const plan = user ? await getTodayPlan(prisma, user.id) : [];
+  const pace = user ? await computePace(prisma, user.id) : null;
 
   return (
     <div className="mx-auto max-w-4xl px-8 py-10">
       <h1 className="text-2xl font-semibold tracking-tight">Dashboard</h1>
       <p className="mt-1 text-sm text-muted">What to work on today.</p>
+
+      {pace && pace.total > 0 && <PaceBanner pace={pace} />}
 
       <CoachPanel insights={insights} />
 
