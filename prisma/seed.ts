@@ -66,7 +66,7 @@ async function main() {
   }
 
   console.log("→ Generating curated ladders…");
-  const g = await generateCuratedProblems(prisma);
+  const g = await generateCuratedProblems(prisma, user.pathMode === "FULL" ? "FULL" : "LITE");
   console.log(`  ✓ ${g.curated} curated problems across ${g.topics} topics`);
 
   console.log(`→ Syncing your CF solves + rating (@${CF_HANDLE})…`);

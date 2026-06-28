@@ -216,14 +216,22 @@ function bandForMonth(month: number): { floor: number; cap: number } {
   return { floor, cap };
 }
 
-const CSES_CAP = 12;
-const CF_CAP = 14;
-const CF_PER_BUCKET = 3; // depth per 100-rating step (CP-31-style volume)
+// Per-mode volume caps. LITE = a tight ~1/day essentials set for exam season
+// (the single best problems per concept); FULL = the complete curriculum to ramp
+// up to after the user's exams.
+const CAPS = {
+  LITE: { cses: 2, cf: 2, perBucket: 1, eduDp: 6 },
+  FULL: { cses: 12, cf: 14, perBucket: 3, eduDp: Infinity },
+} as const;
 
 // The DP foundations topic receives the AtCoder Educational DP Contest.
 const EDU_DP_TOPIC = "dp-foundations";
 
-export async function generateCuratedProblems(prisma: PrismaClient) {
+export async function generateCuratedProblems(
+  prisma: PrismaClient,
+  mode: "LITE" | "FULL" = "FULL",
+) {
+  const cap = CAPS[mode];
   const topics = await prisma.topic.findMany({
     orderBy: [{ month: "asc" }, { name: "asc" }],
     select: { id: true, slug: true, month: true, cfTags: true },
@@ -238,7 +246,7 @@ export async function generateCuratedProblems(prisma: PrismaClient) {
   const usedCF = new Set<string>();
   let total = 0;
   for (const topic of topics) {
-    const { floor, cap } = bandForMonth(topic.month);
+    const { floor, cap: capRating } = bandForMonth(topic.month);
     const items: {
       topicId: string;
       problemId: string;
@@ -257,7 +265,7 @@ export async function generateCuratedProblems(prisma: PrismaClient) {
       (a, b) =>
         (csesOrder.get(a.externalId) ?? 1e9) - (csesOrder.get(b.externalId) ?? 1e9),
     );
-    for (const p of csesProbs.slice(0, CSES_CAP)) {
+    for (const p of csesProbs.slice(0, cap.cses)) {
       items.push({ topicId: topic.id, problemId: p.id, order: order++, tier: "core", kind: "cses" });
     }
 
@@ -268,7 +276,7 @@ export async function generateCuratedProblems(prisma: PrismaClient) {
         select: { id: true, externalId: true },
       });
       eduDp.sort((a, b) => a.externalId.localeCompare(b.externalId));
-      for (const p of eduDp) {
+      for (const p of eduDp.slice(0, cap.eduDp)) {
         items.push({ topicId: topic.id, problemId: p.id, order: order++, tier: "core", kind: "atcoder-dp" });
       }
     }
@@ -280,7 +288,7 @@ export async function generateCuratedProblems(prisma: PrismaClient) {
         where: {
           source: "CODEFORCES",
           sourceTags: { hasSome: topic.cfTags },
-          sourceRating: { gte: floor, lte: cap },
+          sourceRating: { gte: floor, lte: capRating },
         },
         select: { id: true, sourceRating: true, quality: true },
       });
@@ -297,11 +305,11 @@ export async function generateCuratedProblems(prisma: PrismaClient) {
         const top = buckets
           .get(b)!
           .sort((a, z) => (z.quality ?? 0) - (a.quality ?? 0))
-          .slice(0, CF_PER_BUCKET);
+          .slice(0, cap.perBucket);
         ramp.push(...top);
       }
-      const span = Math.max(1, cap - floor);
-      for (const p of ramp.slice(0, CF_CAP)) {
+      const span = Math.max(1, capRating - floor);
+      for (const p of ramp.slice(0, cap.cf)) {
         const r = p.sourceRating ?? floor;
         const frac = (r - floor) / span;
         const tier = frac <= 0.5 ? "core" : frac <= 0.8 ? "extra" : "challenge";
@@ -330,7 +338,9 @@ export async function rebuildCatalogAndPath(prisma: PrismaClient) {
   } catch {
     // AtCoder's community API is best-effort; the path still rebuilds without it.
   }
-  const curated = await generateCuratedProblems(prisma);
+  const u = await prisma.user.findFirst({ select: { pathMode: true } });
+  const mode = u?.pathMode === "FULL" ? "FULL" : "LITE";
+  const curated = await generateCuratedProblems(prisma, mode);
   return { cf, at, curated };
 }
 

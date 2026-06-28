@@ -4,6 +4,7 @@ import { ratingColor } from "@/lib/utils";
 import { SolveToggle } from "@/components/solve-toggle";
 import { ResyncButton } from "@/components/resync-button";
 import { RebuildButton } from "@/components/rebuild-button";
+import { setPathMode } from "@/app/actions";
 
 export const dynamic = "force-dynamic";
 
@@ -45,15 +46,14 @@ async function getPath() {
       distinct: ["problemId"],
       select: { problemId: true },
     }),
-    prisma.user.findFirst({ select: { id: true } }),
+    prisma.user.findFirst({ select: { id: true, pathMode: true } }),
   ]);
-  void user;
   const solved = new Set(solvedRows.map((s) => s.problemId));
-  return { topics, solved };
+  return { topics, solved, mode: user?.pathMode === "FULL" ? "FULL" : "LITE" };
 }
 
 export default async function LearnPage() {
-  const { topics, solved } = await getPath();
+  const { topics, solved, mode } = await getPath();
 
   // The single next unsolved problem, in path order, + global progress.
   let next:
@@ -87,10 +87,22 @@ export default async function LearnPage() {
         </div>
       </div>
       <p className="mt-1 text-sm text-muted">
-        Your curated route to full coverage — CSES&apos;s canonical sequence plus
-        Codeforces difficulty ramps. Follow it top to bottom; you never have to
-        wonder what to solve.
+        {mode === "LITE"
+          ? "Exam-season essentials — one tight problem a day (Mon–Sat), contest on Sunday. Follow it top to bottom; you never have to wonder what to solve."
+          : "Your curated route to full coverage — CSES's canonical sequence plus Codeforces difficulty ramps. Follow it top to bottom."}
       </p>
+
+      <div className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-surface px-4 py-2.5 text-sm">
+        <span className="text-muted">Mode:</span>
+        <span className="font-medium" style={{ color: mode === "LITE" ? "var(--ac)" : "var(--accent)" }}>
+          {mode === "LITE" ? "Exam season · 1/day" : "Full curriculum"}
+        </span>
+        <form action={setPathMode.bind(null, mode === "LITE" ? "FULL" : "LITE")} className="ml-auto">
+          <button type="submit" className="rounded-md border border-border px-3 py-1 text-xs hover:bg-surface-2">
+            {mode === "LITE" ? "Ramp up to full path →" : "Back to exam mode (1/day) →"}
+          </button>
+        </form>
+      </div>
 
       <div className="mt-4 flex flex-wrap items-center gap-x-4 gap-y-2">
         <ResyncButton />

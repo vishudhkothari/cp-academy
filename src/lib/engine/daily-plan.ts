@@ -2,7 +2,7 @@ import type { PrismaClient } from "@prisma/client";
 import { countDueReviews } from "./review";
 import { weakestCell, type Axis } from "./mastery";
 import { computeReadiness } from "./readiness";
-import { computePace, paceStatus } from "./pace";
+import { computePace, paceStatus, type Pace } from "./pace";
 import { weeklySchedule } from "./schedule";
 
 // How many path problems to surface as concrete cards in a single day's plan,
@@ -46,16 +46,95 @@ async function solvedSet(prisma: PrismaClient, userId: string): Promise<Set<stri
   return new Set(rows.map((r) => r.problemId));
 }
 
+// LITE plan: at most two items — today's single problem (or the Sunday contest)
+// plus a one-line progress note. No reviews/weakness/upsolve noise.
+async function buildLitePlan(
+  prisma: PrismaClient,
+  userId: string,
+  pace: Pace,
+  solved: Set<string>,
+): Promise<PlanItem[]> {
+  const items: PlanItem[] = [];
+
+  if (pace.finished) {
+    items.push({
+      type: "PACE",
+      title: "Curriculum complete 🎉",
+      reason: `All ${pace.total} essentials done. Ramp up to the full path after your exams.`,
+      href: "/learn",
+    });
+    return items;
+  }
+
+  // Sunday = contest day.
+  if (pace.isRestDay) {
+    const u = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { weeklyDay: true, weeklyHour: true },
+    });
+    const sch = u ? weeklySchedule(u.weeklyDay, u.weeklyHour) : null;
+    const done = sch
+      ? await prisma.contest.findFirst({
+          where: { kind: "WEEKLY", startsAt: { gte: sch.thisSlot } },
+          select: { id: true },
+        })
+      : null;
+    items.push({
+      type: "CONTEST",
+      title: done ? "Open this week's contest" : sch?.isOpen ? "Weekly contest is open — start now" : "Weekly contest today",
+      reason: sch ? `Sunday is contest day · ${sch.label}. 90 min, 3 problems, upsolve the rest.` : "Sunday is contest day.",
+      href: "/contests",
+    });
+    return items;
+  }
+
+  // Mon–Sat = exactly one problem.
+  const st = paceStatus(pace);
+  items.push({
+    type: "PACE",
+    title: pace.todayRemaining > 0 ? "Today's problem" : "Today's problem done ✓",
+    reason: `${pace.done}/${pace.total} done · ${st.label} · 1/day, ~finish ${fmtDate(pace.targetDate)}.`,
+    href: "/learn",
+  });
+  if (pace.todayRemaining > 0) {
+    const curated = await prisma.curatedProblem.findMany({
+      orderBy: [{ topic: { month: "asc" } }, { topic: { name: "asc" } }, { order: "asc" }],
+      select: {
+        problemId: true,
+        problem: { select: { id: true, title: true } },
+        topic: { select: { name: true, month: true } },
+      },
+    });
+    const next = curated.find((c) => !solved.has(c.problemId));
+    if (next) {
+      items.push({
+        type: "PROBLEM",
+        title: next.problem.title,
+        reason: `Today's one problem · Month ${next.topic.month} · ${next.topic.name}.`,
+        href: `/problems/${next.problem.id}`,
+      });
+    }
+  }
+  return items;
+}
+
 export async function buildDailyPlan(
   prisma: PrismaClient,
   userId: string,
 ): Promise<PlanItem[]> {
   const items: PlanItem[] = [];
   const solved = await solvedSet(prisma, userId);
+  const pace = await computePace(prisma, userId);
 
+  // LITE (exam season) — keep it dead simple: one problem on solving-days, the
+  // contest on Sunday, nothing else competing for attention.
+  if (pace.mode === "LITE") {
+    return buildLitePlan(prisma, userId, pace, solved);
+  }
+
+  // FULL — the full priority cascade.
   // 0) Pace header — the finish-in-one-year target. Sets today's quota and shows
   //    whether you're on track to clear the whole curriculum within the year.
-  const pace = await computePace(prisma, userId);
   if (pace.total > 0 && !pace.finished) {
     const st = paceStatus(pace);
     const goal =

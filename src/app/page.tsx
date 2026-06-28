@@ -23,10 +23,13 @@ function PaceBanner({ pace }: { pace: Pace }) {
   const st = paceStatus(pace);
   const color = PACE_TONE[st.tone];
   const pct = Math.round(pace.pct * 100);
+  const lite = pace.mode === "LITE";
   return (
     <section className="mt-6 rounded-xl border border-border bg-surface p-5">
       <div className="flex items-baseline justify-between gap-3">
-        <h2 className="text-sm font-medium uppercase tracking-wide text-muted">One-year plan</h2>
+        <h2 className="text-sm font-medium uppercase tracking-wide text-muted">
+          {lite ? "Daily plan · 1/day" : "One-year plan"}
+        </h2>
         <span className="text-xs font-medium" style={{ color }}>
           {st.label}
         </span>
@@ -34,7 +37,7 @@ function PaceBanner({ pace }: { pace: Pace }) {
 
       <div className="mt-3 flex items-baseline gap-2">
         <span className="text-3xl font-semibold">{pace.done}</span>
-        <span className="text-sm text-muted">/ {pace.total} curated problems · {pct}%</span>
+        <span className="text-sm text-muted">/ {pace.total} essentials · {pct}%</span>
       </div>
 
       {/* progress: solved (color) vs where you should be by now (ticked) */}
@@ -52,19 +55,19 @@ function PaceBanner({ pace }: { pace: Pace }) {
       <div className="mt-3 grid grid-cols-3 gap-3 text-sm">
         <div>
           <div className="font-semibold" style={{ color }}>
-            {pace.finished ? "—" : pace.todayRemaining > 0 ? pace.todayRemaining : "✓"}
+            {pace.finished ? "—" : pace.isRestDay ? "Contest" : pace.todayRemaining > 0 ? pace.todayRemaining : "✓"}
           </div>
-          <div className="text-xs text-muted">to solve today</div>
+          <div className="text-xs text-muted">{pace.isRestDay ? "today (Sunday)" : "to solve today"}</div>
         </div>
         <div>
-          <div className="font-semibold">{pace.perDayNeeded}/day</div>
-          <div className="text-xs text-muted">to finish on time</div>
+          <div className="font-semibold">{lite ? "1/day" : `${pace.perDayNeeded}/day`}</div>
+          <div className="text-xs text-muted">{lite ? "Mon–Sat" : "to finish on time"}</div>
         </div>
         <div>
-          <div className="font-semibold">{pace.daysLeft}d</div>
-          <div className="text-xs text-muted">
-            left · target {pace.targetDate.toLocaleDateString("en-US", { month: "short", year: "numeric" })}
+          <div className="font-semibold">
+            {pace.targetDate.toLocaleDateString("en-US", { month: "short", year: "numeric" })}
           </div>
+          <div className="text-xs text-muted">{lite ? "finish (1/day)" : `target · ${pace.daysLeft}d left`}</div>
         </div>
       </div>
     </section>

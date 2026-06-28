@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import type { ContestKind } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { syncCodeforcesUser, syncAtcoderUser } from "@/lib/sources/sync";
+import { syncCodeforcesUser, syncAtcoderUser, generateCuratedProblems } from "@/lib/sources/sync";
 import { generateContest, recomputeContestEntry } from "@/lib/engine/contest";
 import { recordProblemOutcome } from "@/lib/engine/mastery";
 import { ensureReviewCard, gradeReview, type ReviewGrade } from "@/lib/engine/review";
@@ -169,6 +169,19 @@ export async function createContest(kind: ContestKind) {
 // Kept for the existing weekly-contest form button.
 export async function createWeeklyContest() {
   return createContest("WEEKLY");
+}
+
+// Switch curriculum intensity and regenerate the path: LITE (tight ~1/day
+// essentials for exam season) ↔ FULL (the complete curriculum, post-exam).
+// Regeneration is fast — it runs against the already-synced catalog.
+export async function setPathMode(mode: "LITE" | "FULL") {
+  const user = await currentUser();
+  await prisma.user.update({ where: { id: user.id }, data: { pathMode: mode } });
+  await generateCuratedProblems(prisma, mode);
+  await refreshDailyPlan(prisma, user.id); // today's plan must reflect the new mode
+  revalidatePath("/learn");
+  revalidatePath("/");
+  redirect("/learn");
 }
 
 // Set the user's fixed weekly-contest slot (day + hour, IST).
